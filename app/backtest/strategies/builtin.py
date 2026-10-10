@@ -103,7 +103,7 @@ class MA200PanicStrategy(Strategy):
         "收盘跌破200MA→次日开盘卖出(唯一卖出)；空仓时收盘站上200MA→次日开盘买入；"
         "收盘跌破500MA(恐慌区)→次日开盘买入。恐慌仓反弹站上500MA不卖出："
         "继续持有直到站上200MA后再跌破200MA才离场。"
-        "可选过热增强：收盘>200MA+50%止盈卖出，回落到200MA+20%(线上)买回。"
+        "可选过热增强：收盘>200MA+50%止盈卖出，回落到200MA+20%买回。"
     )
 
     OVERHEAT_SELL = 1.5    # 收盘 > 趋势均线×1.5 → 过热止盈
@@ -119,7 +119,7 @@ class MA200PanicStrategy(Strategy):
         ParamSpec("weight", "持仓权重(1=全仓)", type="number", default=1.0, min=0.05, max=1.0, step=0.05),
         ParamSpec("overheat", "过热增强", type="select", default="off",
                   options=[{"value": "off", "label": "关闭"},
-                           {"value": "on", "label": "开启（收盘>200MA+50%止盈，回落200MA+20%线上买回）"}]),
+                           {"value": "on", "label": "开启（收盘>200MA+50%止盈，回落200MA+20%买回）"}]),
     ]
 
     def warmup_days(self, params: dict) -> int:

@@ -208,7 +208,7 @@ function renderResult(data) {
   const sName = sInfo ? sInfo.name : "策略";
   const overheatOn = (data.params || {}).overheat === "on";
   sSub.textContent = overheatOn
-    ? `${mainTk} · ${sName}(收盘 > 200MA + 50%止盈，回落200MA + 20%线上买回)`
+    ? `${mainTk} · ${sName} + (收盘 > 200MA + 50%止盈，回落200MA + 20%买回)`
     : `${mainTk} · ${sName}`;
   sT.style.display = "block";
   sSub.style.display = "block";
@@ -280,29 +280,52 @@ function renderResult(data) {
 
 let navChart = null, ddChart = null, annualChart = null;
 
+// ---------- 系列视觉语义（折线图与年度柱状图共用的单点权威） ----------
+// 系列名与颜色一律在此定义并由各系列显式引用，不依赖 ECharts palette 按序轮转
+// （palette 槽位按系列序号消耗，显式设色的系列也会占槽）——由此系列顺序（排版）
+// 与配色（语义）彻底解耦：调整顺序不会让颜色漂移。
+const STRATEGY_COLOR = "#58a6ff";                // 主策略：蓝（两图主曲线/主柱同色）
+const BASELINE_COLOR = "rgba(88,166,255,0.45)";  // 未增强基线：同色系半透明（同一策略的另一种形态）
+const BENCH_COLORS = ["#d29922", "#a371f7", "#db61a2", "#39c5cf"];  // 基准轮转：黄/紫/粉/青
+
+// 系列命名（两图统一）：配跑基线时 主=「策略.增强」基线=「策略」；
+// 无基线时视有无基准叫「策略」/「组合」。返回的顺序就是两图的系列语义顺序。
+function seriesMeta(data) {
+  const hasBl = !!(data.baseline_policy && data.baseline_policy.ok);
+  const hasBench = Object.keys(data.benchmarks || {}).length > 0;
+  return {
+    hasBl, hasBench,
+    mainName: hasBl ? "策略.增强" : (hasBench ? "策略" : "组合"),
+    baselineName: "策略",
+  };
+}
+
 function renderNavChart(data) {
   navChart = navChart || echarts.init($("#nav-chart"));
-  const hasBl = !!(data.baseline_policy && data.baseline_policy.ok);
+  // 系列顺序 = 语义顺序（与年度柱状图一致）：主策略 → 基线（若有） → 基准；
+  // 颜色全部显式指定（见系列视觉语义常量区），与顺序解耦
+  const { hasBl, mainName, baselineName } = seriesMeta(data);
   const series = [{
-    // 主策略名：配跑基线时主=「策略.增强」基线=「策略」；无基线维持「策略/组合」
-    name: hasBl ? "策略.增强"
-      : (Object.keys(data.benchmarks).length ? "策略" : "组合"),
+    name: mainName,
     type: "line", data: data.nav.values, showSymbol: false,
-    lineStyle: { width: 2, color: "#58a6ff" },
+    lineStyle: { width: 2, color: STRATEGY_COLOR },
   }];
   // 未增强基线（overheat=on 配跑）：与主策略同色系虚线半透明（同策略的另一种形态）
   if (hasBl) {
     series.push({
-      name: "策略", type: "line", data: data.baseline_policy.nav.values, showSymbol: false,
-      lineStyle: { width: 1.5, type: "dashed", color: "#58a6ff", opacity: 0.55 },
+      name: baselineName, type: "line", data: data.baseline_policy.nav.values, showSymbol: false,
+      lineStyle: { width: 1.5, type: "dashed", color: STRATEGY_COLOR, opacity: 0.55 },
     });
   }
-  for (const [name, b] of Object.entries(data.benchmarks)) {
+  Object.entries(data.benchmarks || {}).forEach(([name, b], i) => {
     series.push({
       name, type: "line", data: b.nav.values, showSymbol: false,
-      lineStyle: { width: 1.5, type: "dashed", opacity: 0.75 },
+      lineStyle: {
+        width: 1.5, type: "dashed", opacity: 0.75,
+        color: BENCH_COLORS[i % BENCH_COLORS.length],
+      },
     });
-  }
+  });
   const dates = data.nav.dates;
 
   // ---- 交易打点：按日聚合（▲净加仓 / ▼净减仓 / ◆同日双向换仓）+ 定投入金小点 ----
@@ -427,31 +450,31 @@ function renderAnnualChart(data) {
     ...benches.flatMap(([, b]) => Object.keys(b.perf.annual_returns || {})),
   ])].sort();
   annualChart = annualChart || echarts.init($("#annual-chart"));
-  // 系列固定配色：策略主柱=蓝（与净值图主曲线同色），基线（另一种形态）=同色半透明，
-  // 基准轮转黄/紫/粉/青；正负由柱向表达（0 轴上下），颜色只负责区分系列
+  // 系列顺序 = 语义顺序（与净值折线图一致）：主策略 → 基线（若有） → 基准；
+  // 颜色全部显式指定（见系列视觉语义常量区），与顺序解耦；
+  // 正负由柱向表达（0 轴上下），颜色只负责区分系列
+  const { mainName, baselineName } = seriesMeta(data);
   const series = [{
-    name: bl ? "策略.增强" : (benches.length ? "策略" : "组合"), type: "bar",
+    name: mainName, type: "bar",
     data: years.map(y => ar[y] ?? null), barMaxWidth: 34,
+    itemStyle: { color: STRATEGY_COLOR },
   }];
-  for (const [name, b] of benches) {
+  if (bl) {
+    series.push({
+      name: baselineName, type: "bar",
+      data: years.map(y => (bl.perf.annual_returns || {})[y] ?? null),
+      itemStyle: { color: BASELINE_COLOR }, barMaxWidth: 34,
+    });
+  }
+  benches.forEach(([name, b], i) => {
     series.push({
       name, type: "bar",
       data: years.map(y => (b.perf.annual_returns || {})[y] ?? null),
-      barMaxWidth: 34,
+      itemStyle: { color: BENCH_COLORS[i % BENCH_COLORS.length] }, barMaxWidth: 34,
     });
-  }
-  if (bl) {
-    // 基线放系列尾部（palette 按序轮转不挤占基准配色，颜色显式覆盖为半透明蓝）；
-    // 系列名「策略」与净值图图例一致
-    series.push({
-      name: "策略", type: "bar",
-      data: years.map(y => (bl.perf.annual_returns || {})[y] ?? null),
-      itemStyle: { color: "rgba(88,166,255,0.45)" }, barMaxWidth: 34,
-    });
-  }
+  });
   annualChart.setOption({
     animation: false,
-    color: ["#58a6ff", "#d29922", "#a371f7", "#db61a2", "#39c5cf"],
     grid: { left: 56, right: 20, top: 30, bottom: 30 },
     legend: { top: 0, textStyle: { color: "#8b949e" } },
     tooltip: { trigger: "axis", backgroundColor: "#1c2128", borderColor: "#2d333b",
