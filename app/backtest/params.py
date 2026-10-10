@@ -1,8 +1,7 @@
-"""参数解析/校验与网格扫描。"""
+"""参数解析/校验。"""
 from __future__ import annotations
 
-import itertools
-from typing import Any, Optional
+from typing import Any
 
 from app.backtest.strategies.base import Strategy
 
@@ -25,16 +24,3 @@ def validate_params(strategy: type[Strategy], params: dict) -> dict:
                 raise ValueError(f"{strategy.id}.{key}={v} 不在选项 {valid} 中")
         clean[key] = v
     return clean
-
-
-def build_grid(strategy: type[Strategy], overrides: Optional[dict] = None) -> list[dict]:
-    """网格扫描参数组合。overrides 形如 {"ma": [100,200,300]} 覆盖 spec.grid。"""
-    combos: list[dict[str, Any]] = [{}]
-    for sp in strategy.params:
-        values = (overrides or {}).get(sp.key)
-        if values is None:
-            values = sp.grid or [sp.default]
-        if not isinstance(values, (list, tuple)):
-            values = [values]
-        combos = [{**c, sp.key: v} for c in combos for v in values]
-    return combos

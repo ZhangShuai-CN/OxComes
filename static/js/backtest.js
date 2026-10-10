@@ -46,10 +46,20 @@ function currentStrategy() {
   return catalog.find(s => s.id === $("#strategy-select").value);
 }
 
+// 各策略的默认基准对照：择时类策略需要跟「TQQQ 死拿」+「QQQ 标杆」双对照；
+// 买入持有/定投本身就是 TQQQ 的持有形态，再对照 TQQQ 是重复 → 只留 QQQ
+const DEFAULT_BENCHMARKS = {
+  buy_hold: "QQQ",
+  dca: "QQQ",
+  ma200_panic: "TQQQ,QQQ",
+  ma_cross: "TQQQ,QQQ",
+};
+
 function renderParamForm() {
   const s = currentStrategy();
   if (!s) return;
   $("#strategy-desc").textContent = s.description;
+  $("#benchmarks").value = DEFAULT_BENCHMARKS[s.id] || "QQQ";
   $("#param-form").innerHTML = s.params.map(p => {
     const val = p.default ?? "";
     switch (p.type) {
@@ -130,11 +140,12 @@ const esc = (s) => String(s).replace(/[<>&"]/g, c =>
   ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
 
 function perfCards(p, opts = {}) {
-  const nm = opts.name ? `${opts.name} ` : "";   // 卡片标注主标的(如 "TQQQ 年化 IRR")
-  // 定投等现金流场景:主口径用真钱权 XIRR;等效一次性(cagr)放在 BARRA sub 提示
+  // 主策略卡统一「策略」前缀：对比基准卡用基准名（如 "TQQQ 年化 IRR"），
+  // 避免主标的=TQQQ 且基准含 TQQQ 时两列卡片同名混淆
+  // 定投等现金流场景:主口径用真钱权 XIRR;等效一次性(cagr)放在 sub 提示
   const hasCF = p.invested != null && p.xirr != null;
   const irrVal = hasCF ? p.xirr : (p.cagr ?? 0);
-  const irrLabel = `${nm}年化 IRR`;
+  const irrLabel = `策略年化 IRR`;
   const irrSub = hasCF
     ? `等效一次性年化 ${fmtPct(p.cagr ?? 0, 2)} · 总收益 ${fmtTotal(p.total_return ?? 0)} / ${(p.years ?? 0).toFixed(1)} 年`
     : `总收益 ${fmtTotal(p.total_return ?? 0)} / ${(p.years ?? 0).toFixed(1)} 年`;
@@ -143,22 +154,20 @@ function perfCards(p, opts = {}) {
   ];
   // 期末账户总额(用户主诉求:直观看到最后有多少钱;定投场景分母=总投入)
   if (opts.finalValue != null && opts.initialValue > 0) {
-    cards.push({ label: `${nm}期末账户总额`, value: fmtMoney(opts.finalValue),
+    cards.push({ label: `策略期末账户总额`, value: fmtMoney(opts.finalValue),
       cls: (opts.finalValue ?? 0) >= opts.initialValue ? "pos" : "neg",
       sub: hasCF ? `总投入 ${fmtMoney(opts.initialValue)} · ${(opts.finalValue / opts.initialValue).toFixed(1)}x`
                  : `初始 ${fmtMoney(opts.initialValue)} · ${(opts.finalValue / opts.initialValue).toFixed(1)}x` });
   }
   cards.push(
-    { label: `${nm}最大回撤`, value: fmtPct(p.max_drawdown ?? 0, 1), cls: "neg",
+    { label: `策略最大回撤`, value: fmtPct(p.max_drawdown ?? 0, 1), cls: "neg",
       sub: `Calmar ${fmtNum(p.calmar ?? 0)}` },
-    { label: `${nm}总交易次数`, value: opts.nRebalanceDays != null ? String(opts.nRebalanceDays) : "—",
+    { label: `策略总交易次数`, value: opts.nRebalanceDays != null ? String(opts.nRebalanceDays) : "—",
       cls: "", sub: `买 ${opts.nBuys ?? 0} 笔 · 卖 ${opts.nSells ?? 0} 笔`
-        + (opts.nDeposits ? ` · 定投入金 ${opts.nDeposits} 期` : "") },
-    { label: "Sharpe", value: p.sharpe != null ? fmtNum(p.sharpe) : "—", cls: "",
-      sub: `Sortino ${p.sortino != null ? fmtNum(p.sortino) : "—"}` },
-    { label: `${nm}年化波动`, value: fmtPct(p.ann_vol ?? 0, 1), cls: "",
+        + (opts.nDeposits ? ` · 定注入金 ${opts.nDeposits} 期` : "") },
+    { label: `策略年化波动`, value: fmtPct(p.ann_vol ?? 0, 1), cls: "",
       sub: `胜率(日) ${fmtPct(p.win_rate_daily ?? 0, 0)} · (月) ${fmtPct(p.win_rate_monthly ?? 0, 0)}` },
-    { label: `${nm}最好/最差年度`, value: `${fmtPct(p.best_year ?? 0, 0)} / ${fmtPct(p.worst_year ?? 0, 0)}`, cls: "",
+    { label: `策略最好/最差年度`, value: `${fmtPct(p.best_year ?? 0, 0)} / ${fmtPct(p.worst_year ?? 0, 0)}`, cls: "",
       sub: `最长恢复 ${p.longest_recovery_days != null ? p.longest_recovery_days + " 日" : "—"}` },
   );
   return cards;
@@ -181,10 +190,8 @@ function renderResult(data) {
   const capitalInput = Number($("#capital").value) || 10000;
   const initialValue = p.invested ?? (navVals.length ? navVals[0] : capitalInput);
   // 定投场景分母=总投入(期初+全部定投);纯策略=首日净值(=初始资金)
-  const mainName = (data.tickers && data.tickers[0]) || "策略";      // 卡片标注主标的
   const nDeposits = (data.trades || []).filter(t => t.side === "deposit").length;
   $("#perf-cards").innerHTML = cardsHtml(perfCards(p, {
-    name: mainName,
     finalValue: navVals.length ? navVals[navVals.length - 1] : null,
     initialValue,
     nRebalanceDays: data.n_rebalance_days,
@@ -192,8 +199,17 @@ function renderResult(data) {
     nSells: data.n_sells,
     nDeposits,
   }));
+  // 策略区两级标题：h3「策略」+ h4「{主标的} · {策略名}」（与基准分组 h4 同层级同字号，
+  // 跑 TQQQ 时与「TQQQ · 买入持有」完全对仗）
+  const sInfo = catalog.find(s => s.id === data.strategy_id);
+  const sT = document.getElementById("strategy-title");
+  const sSub = document.getElementById("strategy-subtitle");
+  const mainTk = (data.tickers && data.tickers[0]) || "";
+  sSub.textContent = `${mainTk} · ${sInfo ? sInfo.name : "策略"}`;
+  sT.style.display = "block";
+  sSub.style.display = "block";
 
-  // 基准对照卡（QQQ 等 benchmark 的完整指标，与策略同口径并排）
+  // 基准对照卡：每个基准一个分组标题 + 独占一行（Q 标的对照互不混排）
   const benchRow = $("#bench-cards");
   const benches = Object.entries(data.benchmarks || {});
   document.getElementById("bench-title").style.display = benches.length ? "block" : "none";
@@ -219,7 +235,10 @@ function renderResult(data) {
       { label: `${name} 最大回撤`, value: fmtPct(bp.max_drawdown ?? 0, 1), cls: "neg",
         sub: `Calmar ${fmtNum(bp.calmar ?? 0)}` },
     ];
-    return cardsHtml(cards);
+    // 基准类型：普通=买入持有；主策略定投时基准镜像同额现金流→镜像定投
+    const bType = bHasCF ? "镜像定投" : "买入持有";
+    return `<div class="bench-group"><h4>${esc(name)} · ${bType}</h4>
+            <div class="stat-row">${cardsHtml(cards)}</div></div>`;
   }).join("");
 
   renderNavChart(data);
@@ -444,51 +463,4 @@ loadStrategies();
 loadDefaultRange();
 window.addEventListener("resize", () => {
   navChart && navChart.resize(); ddChart && ddChart.resize(); annualChart && annualChart.resize();
-});
-
-// ---------- 网格扫描（Phase 4）----------
-$("#scan-btn").addEventListener("click", async () => {
-  const s = currentStrategy();
-  const st = $("#scan-status");
-  const grid = {};
-  for (const p of (s ? s.params : [])) {
-    if (Array.isArray(p.grid) && p.grid.length > 1) grid[p.key] = p.grid;
-  }
-  if (!Object.keys(grid).length) {
-    st.textContent = "当前策略无扫描参数（spec 未定义 grid）";
-    return;
-  }
-  $("#scan-desc").textContent = "扫描维度: " + Object.keys(grid).join(", ");
-  const btn = $("#scan-btn");
-  btn.disabled = true;
-  st.textContent = "扫描中…（组合数在响应中）";
-  try {
-    const body = {
-      strategy: s.id,
-      tickers: [singleTicker()].filter(Boolean),
-      grid, start: $("#start").value || null, end: $("#end").value || null,
-      use_synth_tqqq: document.querySelector('input[name="tqqq-data"]:checked').value,
-    };
-    const res = await fetch("/api/backtest/scan", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const d = await res.json();
-    if (!d.ok) throw new Error(d.detail || "扫描失败");
-    let html = `<table><thead><tr>${Object.keys(grid).map(k => `<th>${k}</th>`).join("")}
-                <th>CAGR</th><th>MDD</th><th>Sharpe</th><th>Calmar</th></tr></thead><tbody>`;
-    for (const r of d.rows.slice(0, 20)) {
-      html += `<tr>${Object.keys(grid).map(k => `<td>${r.params[k]}</td>`).join("")}
-        <td class="pos">${(r.cagr * 100).toFixed(1)}%</td>
-        <td class="neg">${(r.mdd * 100).toFixed(1)}%</td>
-        <td>${r.sharpe != null ? r.sharpe.toFixed(2) : "—"}</td>
-        <td>${r.calmar != null ? r.calmar.toFixed(2) : "—"}</td></tr>`;
-    }
-    $("#scan-result").innerHTML = html + `</tbody></table>`;
-    st.textContent = `共 ${d.n} 组合 · 表格为 Sharpe Top${Math.min(d.rows.length, 20)}`;
-  } catch (e) {
-    st.textContent = "❌ " + e.message;
-  } finally {
-    btn.disabled = false;
-  }
 });

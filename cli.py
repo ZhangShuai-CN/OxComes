@@ -9,7 +9,6 @@
     python cli.py backtest --strategy ma200_panic --tickers TQQQ \
                     --start 1999-01-01 --bench QQQ
     python cli.py strategies                    # 列出已注册策略
-    python cli.py scan --strategy ma200_panic --grid 'ma_trend=[100;150;200]' --tickers TQQQ
 """
 from __future__ import annotations
 
@@ -151,10 +150,7 @@ def cmd_verify_tqqq(args):
 def _fmt_perf(perf: dict) -> str:
     cagr = perf.get("cagr", 0)
     mdd = perf.get("max_drawdown", 0)
-    sharpe = perf.get("sharpe")
-    return (f"CAGR {cagr:+.2%}  MDD {mdd:.2%}  Calmar {perf.get('calmar', 0):.2f}  "
-            f"Sharpe {sharpe:.2f}" if sharpe is not None
-            else f"CAGR {cagr:+.2%}  MDD {mdd:.2%}")
+    return f"CAGR {cagr:+.2%}  MDD {mdd:.2%}  Calmar {perf.get('calmar', 0):.2f}"
 
 
 def cmd_backtest(args):
@@ -203,38 +199,6 @@ def cmd_strategies(args):
         print(f"{'':<22} {s['description']}")
         keys = ", ".join(p["key"] for p in s["params"])
         print(f"{'':<22} params: {keys}\n")
-
-
-def cmd_scan(args):
-    from app.backtest import runner
-    from app.backtest import params as pmod
-    from app.backtest.strategies import get_strategy
-    strategy = get_strategy(args.strategy)
-    overrides = {}
-    if args.grid:
-        for kv in args.grid.split(","):
-            k, v = kv.split("=")
-            try:
-                overrides[k] = json.loads(v)
-            except json.JSONDecodeError:
-                overrides[k] = [s.strip() for s in v.strip("[]").split(";")]
-    combos = pmod.build_grid(strategy, overrides)
-    tickers = [t.strip() for t in args.tickers.split(",")]
-    print(f"网格扫描 {args.strategy}: {len(combos)} 组合")
-    rows = []
-    for i, combo in enumerate(combos, 1):
-        r = runner.run_backtest(args.strategy, combo, tickers,
-                                start=args.start, end=args.end,
-                                benchmarks=None, use_synth_tqqq=args.tqqq_data)
-        if r.ok and r.perf:
-            rows.append((combo, r.perf))
-        if i % 10 == 0:
-            print(f"  ... {i}/{len(combos)}")
-    rows.sort(key=lambda x: (x[1].get("sharpe") if x[1].get("sharpe") is not None else -99), reverse=True)
-    print(f"\n{'参数':<44} {'CAGR':>9} {'MDD':>9} {'Sharpe':>8}")
-    for combo, perf in rows[:20]:
-        print(f"{str(combo):<44} {perf['cagr']:>8.2%} {perf['max_drawdown']:>8.1%} "
-              f"{(perf.get('sharpe') or 0):>8.2f}")
 
 
 def cmd_fetch_assets(args):
@@ -320,15 +284,6 @@ def main():
     sp.set_defaults(fn=cmd_backtest)
 
     sub.add_parser("strategies").set_defaults(fn=cmd_strategies)
-
-    sp = sub.add_parser("scan")
-    sp.add_argument("--strategy", required=True)
-    sp.add_argument("--grid", default=None, help='如 \'ma=[50;100;200]\'（分号分隔）')
-    sp.add_argument("--tickers", required=True)
-    sp.add_argument("--start", default=None)
-    sp.add_argument("--end", default=None)
-    sp.add_argument("--tqqq-data", choices=["auto", "always", "never"], default="auto")
-    sp.set_defaults(fn=cmd_scan)
 
     args = p.parse_args()
     settings.ensure_dirs()
