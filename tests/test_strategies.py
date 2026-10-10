@@ -110,6 +110,71 @@ def test_ma200_panic_shallow_dip_sell_then_reentry():
     assert _switches(w) == 3
 
 
+def test_ma200_panic_overheat_sell_and_rebuy():
+    """过热增强完整环（overheat=on，滞回带）：
+    缓涨持有 → 连续+30% 使 close/ma5 达 1.53（>1.5）止盈卖出 → 过热等待
+    → 回落 day66 ratio=1.22（在 1.2~1.5 带内，**不买回**）
+    → day67 ratio=1.07（进 (200MA, 1.2×200MA] 带内）买回 → day68 跌破200MA（cross_dn）卖出。
+
+    序列（trend=5, panic=20）：缓涨60天(100→159) → +30%×6(→767.46) → 缓降700→645。
+    等比日涨幅 r 的 ratio 稳态 = 5/(1+r⁻¹+…+r⁻⁴)：+10% 仅 1.21、+25% 恰 1.49 均不可达，
+    +30% 稳态 1.58 才能可靠触发过热带。
+    """
+    qqq = [100.0 + 1.0 * i for i in range(60)]
+    qqq += [round(159.0 * 1.3 ** k, 2) for k in range(1, 7)]    # 206.7 → 767.46
+    qqq += [700.0, 680.0, 660.0, 655.0, 650.0, 645.0]           # 缓降回落
+    w = _built_w(MA200PanicStrategy, {"ma_trend": 5, "ma_panic": 20, "overheat": "on",
+                                      "signal_ticker": "QQQ", "holding_ticker": "TQQQ"}, qqq)
+    # 缓涨段持有（day4 站上 ma5 买入）
+    assert w.iloc[4] == 1.0 and w.iloc[59] == 1.0
+    # day62: 349.32 / ma5=228.35 = 1.53 > 1.5 → 过热止盈卖出
+    assert w.iloc[62] == 0.0
+    # day63..66 全程 wait：ratio 1.58/1.58/1.58/1.22 —— 1.22 在 (1.2, 1.5] 带内不买回
+    assert w.iloc[63:67].eq(0).all()
+    # day67: 680 / ma5=638.39 = 1.07 ∈ (200MA, 1.2×200MA] → 买回
+    assert w.iloc[67] == 1.0
+    # day68: 660 < ma5=679.56（昨日 680>638 在线上 → 今日跌穿，cross_dn）→ 卖出
+    assert w.iloc[68] == 0.0
+    assert _switches(w) == 4     # 买(4) + 过热卖(62) + 回落买(67) + 破线卖(68)
+
+
+def test_ma200_panic_overheat_crash_to_panic_rebuy():
+    """过热等待中遭崩盘：进带当日的回落买回落又大幅跌穿 200MA → 正常卖出入观望带；
+    随后砸穿 500MA → 空仓恐慌买入（wait/hold 的向下出口最终汇合到原空仓语义）。
+
+    序列：缓涨60 → +30%×6 → 崩盘 600/450/300/180/150/140。
+    """
+    qqq = [100.0 + 1.0 * i for i in range(60)]
+    qqq += [round(159.0 * 1.3 ** k, 2) for k in range(1, 7)]
+    qqq += [600.0, 450.0, 300.0, 180.0, 150.0, 140.0]
+    w = _built_w(MA200PanicStrategy, {"ma_trend": 5, "ma_panic": 20, "overheat": "on",
+                                      "signal_ticker": "QQQ", "holding_ticker": "TQQQ"}, qqq)
+    # day62 过热（349.32/ma5=228.35=1.53）止盈 → wait
+    assert w.iloc[62] == 0.0 and w.iloc[63:66].eq(0).all()
+    # day66: 600/ma5=552.25=1.09 进回落带 → 买回
+    assert w.iloc[66] == 1.0
+    # day67: 450 < ma5=572.39 且昨日线上 → cross_dn 卖出；450 > ma20=276 观望带不买
+    assert w.iloc[67] == 0.0 and w.iloc[68] == 0.0
+    # day69: 180 < ma20=285.58 恐慌区 → 空仓恐慌买入，持有到底
+    assert w.iloc[69] == 1.0 and w.iloc[69:].eq(1.0).all()
+
+
+def test_ma200_panic_overheat_off_regression():
+    """默认关闭：同一序列无过热卖出（飙涨段一路持有），确证 off 与增强前行为逐日一致。"""
+    qqq = [100.0 + 1.0 * i for i in range(60)]
+    qqq += [round(159.0 * 1.3 ** k, 2) for k in range(1, 7)]
+    qqq += [700.0, 680.0, 660.0, 655.0, 650.0, 645.0]
+    w_on = _built_w(MA200PanicStrategy, {"ma_trend": 5, "ma_panic": 20, "overheat": "on",
+                                         "signal_ticker": "QQQ", "holding_ticker": "TQQQ"}, qqq)
+    w_off = _built_w(MA200PanicStrategy, {"ma_trend": 5, "ma_panic": 20,
+                                          "signal_ticker": "QQQ", "holding_ticker": "TQQQ"}, qqq)
+    # off：无过热逻辑，整个飙涨段持有到 day68（close 660 仍高于 ma5？——660<679 早已破线，
+    # 首次 cross_dn 在 day67 close=680< ma5? 680>638.39 在线上。day68 660<679.56 破线卖）
+    assert w_off.iloc[62] == 1.0           # day62 不卖（与 on 的差异锚）
+    assert not w_on.equals(w_off)          # 两种模式行为确有分岔
+    assert w_off.iloc[4:68].eq(1.0).all() and w_off.iloc[68] == 0.0
+
+
 def test_ma200_panic_param_guards():
     """恐慌线必须长于趋势线（否则无观望带）；缺资产明确报错。"""
     prices = _frame([100.0] * 30)

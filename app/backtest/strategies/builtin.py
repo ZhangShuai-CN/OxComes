@@ -89,6 +89,13 @@ class MA200PanicStrategy(Strategy):
     「跌破200」用交叉事件（从上方跌到下方）而非状态：恐慌买入时价格已在
     200MA 下方，状态语义会买入次日即卖形成死循环；事件语义下恐慌仓的
     出场 = 站上 200MA 之后的再次跌破。
+
+    过热增强（overheat="on"，用户 2026-10-10 拍板）：滞回带止盈——
+    - 持仓中收盘 > 趋势均线×1.5 → **次日开盘卖出**，进入「过热等待」态
+      （空仓遇此条件同样直接等待，不进场）
+    - 过热等待中，收盘回落到 ≤ 均线×1.2 且仍在线上 → **次日开盘买回**；
+      1.2×~1.5× 带内继续等待；跌落到均线下方 → 恢复普通空仓语义
+      （恐慌区/站上规则当日接管）
     """
     id = "ma200_panic"
     name = "200MA趋势 + 500MA恐慌抄底"
@@ -96,7 +103,11 @@ class MA200PanicStrategy(Strategy):
         "收盘跌破200MA→次日开盘卖出(唯一卖出)；空仓时收盘站上200MA→次日开盘买入；"
         "收盘跌破500MA(恐慌区)→次日开盘买入。恐慌仓反弹站上500MA不卖出："
         "继续持有直到站上200MA后再跌破200MA才离场。"
+        "可选过热增强：收盘>200MA+50%止盈卖出，回落到200MA+20%(线上)买回。"
     )
+
+    OVERHEAT_SELL = 1.5    # 收盘 > 趋势均线×1.5 → 过热止盈
+    OVERHEAT_REBUY = 1.2   # 收盘 ≤ 趋势均线×1.2 且线上 → 买回
 
     params = [
         ParamSpec("signal_ticker", "信号资产", type="string", default="TQQQ"),
@@ -106,6 +117,9 @@ class MA200PanicStrategy(Strategy):
         ParamSpec("ma_panic", "恐慌抄底均线(天数)", type="number", default=500, min=21, max=1000, step=1,
                   grid=[300, 400, 500, 600]),
         ParamSpec("weight", "持仓权重(1=全仓)", type="number", default=1.0, min=0.05, max=1.0, step=0.05),
+        ParamSpec("overheat", "过热增强", type="select", default="off",
+                  options=[{"value": "off", "label": "关闭"},
+                           {"value": "on", "label": "开启（收盘>200MA+50%止盈，回落200MA+20%线上买回）"}]),
     ]
 
     def warmup_days(self, params: dict) -> int:
@@ -118,6 +132,7 @@ class MA200PanicStrategy(Strategy):
         trend_n = int(params.get("ma_trend") or 200)
         panic_n = int(params.get("ma_panic") or 500)
         weight = float(params.get("weight") or 1.0)
+        overheat = str(params.get("overheat") or "off") == "on"
 
         out = StrategyOutput(weights=pd.DataFrame(0.0, index=prices.index, columns=prices.columns))
         _asset_columns(prices, signal, holding)
@@ -132,17 +147,36 @@ class MA200PanicStrategy(Strategy):
         enter = above_t | in_panic                       # 买入：站上趋势线 或 恐慌区
         # 卖出「跌破」= 交叉事件：昨日线上 → 今日线下
         cross_dn = above_t.shift(1, fill_value=False) & ~above_t
+        # 过热增强：卖出/买回阈值线（滞回带防鞭打）
+        oh_sell = (sig_px > ma_t * self.OVERHEAT_SELL).fillna(False) if overheat else None
+        oh_rebuy = (sig_px <= ma_t * self.OVERHEAT_REBUY).fillna(False) if overheat else None
 
         w = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
-        holding_pos = False
+        state = "flat"    # flat 空仓 | hold 持仓 | wait 过热等待（等回落买回）
         for date in prices.index:
-            if holding_pos and bool(cross_dn.loc[date]):
-                # 单日暴跌同时穿两线（跌破200又直接进恐慌区）：卖出优先纪律，
-                # 次日收盘若仍在恐慌区(<500MA)则按恐慌规则买回
-                holding_pos = False
-            elif not holding_pos and bool(enter.loc[date]):
-                holding_pos = True
-            if holding_pos:
+            start_state = state
+            if state == "hold":
+                if bool(cross_dn.loc[date]):
+                    # 单日暴跌同时穿两线（跌破200又直接进恐慌区）：卖出优先纪律，
+                    # 卖出当日不再评估进场（哪怕同日已在恐慌区），次日收盘仍在
+                    # 恐慌区(<500MA)则按恐慌规则买回
+                    state = "flat"
+                elif overheat and bool(oh_sell.loc[date]):
+                    state = "wait"             # 过热止盈 → 等回落
+            elif state == "wait":
+                if bool(sig_px.loc[date] <= ma_t.loc[date]):
+                    state = "flat"             # 跌回均线 → 恢复普通空仓语义（同样次日起评估）
+                elif overheat and bool(oh_rebuy.loc[date] and above_t.loc[date]):
+                    state = "hold"             # 回落到 (200MA, 200MA×1.2] 带内 → 买回
+                # 1.2×~1.5× 带内继续等待（滞回带防鞭打）
+            # 进场评估只对「当日开场即空仓」的 flat 生效：当日刚卖出/刚转出的
+            # 不再进场（与原 elif 链的「卖出优先」纪律一致）
+            if start_state == "flat":
+                if overheat and bool(oh_sell.loc[date]):
+                    state = "wait"             # 空仓遇过热：不进场，直接进入回落等待
+                elif bool(enter.loc[date]):
+                    state = "hold"
+            if state == "hold":
                 w.loc[date, holding] = weight
         out.weights = w
         if any(c.startswith("SYNTH_") for c in prices.columns):

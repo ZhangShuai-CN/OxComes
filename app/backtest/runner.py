@@ -38,6 +38,7 @@ class BacktestRun:
     n_rebalance_days: int = 0              # 总交易次数口径：有成交发生的交易日数
     n_buys: int = 0                        # 逐笔买入笔数（不含定投入金）
     n_sells: int = 0                       # 逐笔卖出笔数
+    sibling: Optional["BacktestRun"] = None  # overheat=on 配跑：同窗口 overheat=off 基线（前端策略内对照）
     error: Optional[str] = None
 
     TRADES_CAP = 20_000                    # payload 安全阀（最坏 DCA 周定投 30 年 ≈1561 笔）
@@ -61,6 +62,9 @@ class BacktestRun:
             "n_sells": self.n_sells,
             "trades": [t.to_dict() for t in self.trades[:self.TRADES_CAP]],
             "trades_truncated": len(self.trades) > self.TRADES_CAP,
+            # 过热增强的基线对照（overheat=off 同窗口重跑；主策略未开增强时为 None）
+            "baseline_policy": (self.sibling.to_api_payload()
+                                if self.sibling is not None and self.sibling.ok else None),
             "benchmarks": {
                 name: {
                     "nav": {"dates": [str(d.date()) for d in s.index],
@@ -346,6 +350,24 @@ def run_backtest(
                 f" + 定投 {n_cf} 期 × ${per:,.0f} = 总投入 ${result.invested:,.0f}。"
                 "期末/总投入即倍数分母;想只跑纯定投,把「初始资金」设为 0。"
             )
+
+        # 过热增强开启时配跑同窗口的未增强基线（overheat=off）：前端把两种形态并排
+        # （卡片分组/折线/柱状/交易明细 diff），用户可直接看到增强带来的差异
+        if strategy_id == "ma200_panic" and clean_params.get("overheat") == "on":
+            try:
+                run.sibling = run_backtest(
+                    strategy_id=strategy_id,
+                    params={**clean_params, "overheat": "off"},
+                    tickers=tickers, start=start, end=end, benchmarks=[],
+                    initial_capital=initial_capital, rebalance_cost_bps=rebalance_cost_bps,
+                    use_synth_tqqq=use_synth_tqqq, allow_leverage=allow_leverage,
+                    execution_price=execution_price, prewarm=prewarm)
+                if run.sibling.ok:
+                    run.notes.append(
+                        "ℹ 过热增强已开启：同窗口配跑未增强基线（图表与交易明细中与增强版并排对照）。"
+                    )
+            except Exception as e:
+                logger.warning("过热基线配跑失败(不影响主结果): %s", e)
 
         for b in benchmarks or []:
             try:

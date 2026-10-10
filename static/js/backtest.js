@@ -199,20 +199,51 @@ function renderResult(data) {
     nSells: data.n_sells,
     nDeposits,
   }));
-  // 策略区两级标题：h3「策略」+ h4「{主标的} · {策略名}」（与基准分组 h4 同层级同字号，
-  // 跑 TQQQ 时与「TQQQ · 买入持有」完全对仗）
+  // 策略区两级标题：h3「策略」+ h4「{主标的} · {策略名}」（与基准分组 h4 同层级同字号）；
+  // 过热增强开启时在策略名后附完整增强语义（与参数下拉的选项文案一致）
   const sInfo = catalog.find(s => s.id === data.strategy_id);
   const sT = document.getElementById("strategy-title");
   const sSub = document.getElementById("strategy-subtitle");
   const mainTk = (data.tickers && data.tickers[0]) || "";
-  sSub.textContent = `${mainTk} · ${sInfo ? sInfo.name : "策略"}`;
+  const sName = sInfo ? sInfo.name : "策略";
+  const overheatOn = (data.params || {}).overheat === "on";
+  sSub.textContent = overheatOn
+    ? `${mainTk} · ${sName}(收盘 > 200MA + 50%止盈，回落200MA + 20%线上买回)`
+    : `${mainTk} · ${sName}`;
   sT.style.display = "block";
   sSub.style.display = "block";
+  // 未增强基线（后端 overheat=on 时同窗口配跑）：放策略区下方，组名=原策略名
+  const bl = (data.baseline_policy && data.baseline_policy.ok) ? data.baseline_policy : null;
+  const blWrap = $("#baseline-cards");
+  if (bl) {
+    const blp = bl.perf || {};
+    const blv = (bl.nav || {}).values || [];
+    const blInit = blp.invested ?? (blv.length ? blv[0] : capitalInput);
+    const blIrr = (blp.invested != null && blp.xirr != null) ? blp.xirr : (blp.cagr ?? 0);
+    blWrap.innerHTML = `<div class="bench-group"><h4>${esc(mainTk)} · ${esc(sName)}</h4>
+      <div class="stat-row">${cardsHtml([
+        { label: "年化 IRR", value: fmtPct(blIrr, 2), cls: blIrr >= 0 ? "pos" : "neg",
+          sub: `总收益 ${fmtTotal(blp.total_return ?? 0)} / ${(blp.years ?? 0).toFixed(1)} 年 · 同开窗对照` },
+        { label: "期末账户总额",
+          value: blv.length ? fmtMoney(blv[blv.length - 1]) : "—",
+          cls: (blv.length && blv[blv.length - 1] >= blInit) ? "pos" : "neg",
+          sub: `初始 ${fmtMoney(blInit)} · ${(blv.length ? blv[blv.length - 1] / blInit : 0).toFixed(1)}x` },
+        { label: "最大回撤", value: fmtPct(blp.max_drawdown ?? 0, 1), cls: "neg",
+          sub: `Calmar ${fmtNum(blp.calmar ?? 0)} · 调仓 ${bl.n_rebalance_days} 日` },
+      ])}</div></div>`;
+    blWrap.style.display = "block";
+  } else {
+    blWrap.style.display = "none";
+    blWrap.innerHTML = "";
+  }
 
   // 基准对照卡：每个基准一个分组标题 + 独占一行（Q 标的对照互不混排）
   const benchRow = $("#bench-cards");
   const benches = Object.entries(data.benchmarks || {});
   document.getElementById("bench-title").style.display = benches.length ? "block" : "none";
+  const groupCards = (label, cards, subtitle) =>
+    `<div class="bench-group"><h4>${esc(label)} · ${subtitle}</h4>
+     <div class="stat-row">${cardsHtml(cards)}</div></div>`;
   benchRow.innerHTML = benches.map(([name, b]) => {
     const bp = b.perf || {};
     const bv = (b.nav || {}).values || [];
@@ -237,8 +268,7 @@ function renderResult(data) {
     ];
     // 基准类型：普通=买入持有；主策略定投时基准镜像同额现金流→镜像定投
     const bType = bHasCF ? "镜像定投" : "买入持有";
-    return `<div class="bench-group"><h4>${esc(name)} · ${bType}</h4>
-            <div class="stat-row">${cardsHtml(cards)}</div></div>`;
+    return groupCards(name, cards, bType);
   }).join("");
 
   renderNavChart(data);
@@ -252,11 +282,21 @@ let navChart = null, ddChart = null, annualChart = null;
 
 function renderNavChart(data) {
   navChart = navChart || echarts.init($("#nav-chart"));
+  const hasBl = !!(data.baseline_policy && data.baseline_policy.ok);
   const series = [{
-    name: Object.keys(data.benchmarks).length ? "策略" : "组合",
+    // 主策略名：配跑基线时主=「策略.增强」基线=「策略」；无基线维持「策略/组合」
+    name: hasBl ? "策略.增强"
+      : (Object.keys(data.benchmarks).length ? "策略" : "组合"),
     type: "line", data: data.nav.values, showSymbol: false,
     lineStyle: { width: 2, color: "#58a6ff" },
   }];
+  // 未增强基线（overheat=on 配跑）：与主策略同色系虚线半透明（同策略的另一种形态）
+  if (hasBl) {
+    series.push({
+      name: "策略", type: "line", data: data.baseline_policy.nav.values, showSymbol: false,
+      lineStyle: { width: 1.5, type: "dashed", color: "#58a6ff", opacity: 0.55 },
+    });
+  }
   for (const [name, b] of Object.entries(data.benchmarks)) {
     series.push({
       name, type: "line", data: b.nav.values, showSymbol: false,
@@ -378,24 +418,36 @@ function renderDDChart(data) {
 
 function renderAnnualChart(data) {
   const ar = (data.perf || {}).annual_returns || {};
+  const bl = (data.baseline_policy && data.baseline_policy.ok) ? data.baseline_policy : null;
   const benches = Object.entries(data.benchmarks || {});
-  // 年份 = 策略与全部基准年度收益的并集（有数据的年份才出柱）
+  // 年份 = 策略/未增强基线/全部基准年度收益的并集（有数据的年份才出柱）
   const years = [...new Set([
     ...Object.keys(ar),
+    ...(bl ? Object.keys(bl.perf.annual_returns || {}) : []),
     ...benches.flatMap(([, b]) => Object.keys(b.perf.annual_returns || {})),
   ])].sort();
   annualChart = annualChart || echarts.init($("#annual-chart"));
-  // 系列固定配色：策略=蓝（与净值图主曲线同色），基准轮转黄/紫/粉/青；
-  // 正负由柱向表达（0 轴上下），颜色只负责区分系列
-  const barSeries = (name, seriesAR) => ({
-    name, type: "bar",
-    data: years.map(y => seriesAR[y] ?? null),   // 该年无数据 → 空柱
-    barMaxWidth: 34,
-  });
-  const series = [barSeries(
-    Object.keys(data.benchmarks).length ? "策略" : "组合", ar)];
+  // 系列固定配色：策略主柱=蓝（与净值图主曲线同色），基线（另一种形态）=同色半透明，
+  // 基准轮转黄/紫/粉/青；正负由柱向表达（0 轴上下），颜色只负责区分系列
+  const series = [{
+    name: bl ? "策略.增强" : (benches.length ? "策略" : "组合"), type: "bar",
+    data: years.map(y => ar[y] ?? null), barMaxWidth: 34,
+  }];
   for (const [name, b] of benches) {
-    series.push(barSeries(name, b.perf.annual_returns || {}));
+    series.push({
+      name, type: "bar",
+      data: years.map(y => (b.perf.annual_returns || {})[y] ?? null),
+      barMaxWidth: 34,
+    });
+  }
+  if (bl) {
+    // 基线放系列尾部（palette 按序轮转不挤占基准配色，颜色显式覆盖为半透明蓝）；
+    // 系列名「策略」与净值图图例一致
+    series.push({
+      name: "策略", type: "bar",
+      data: years.map(y => (bl.perf.annual_returns || {})[y] ?? null),
+      itemStyle: { color: "rgba(88,166,255,0.45)" }, barMaxWidth: 34,
+    });
   }
   annualChart.setOption({
     animation: false,
@@ -431,14 +483,25 @@ function renderDDTable(p) {
 function renderTradesTable(data) {
   const trades = data.trades || [];
   document.getElementById("trades-count").textContent = trades.length;
+  // 未增强基线存在时：日期不在基线交易日的买卖 = 过热增强新增的成交（「过热」标签区分）
+  const bl = (data.baseline_policy && data.baseline_policy.ok) ? data.baseline_policy : null;
+  const baseDates = bl ? new Set((bl.trades || []).map(t => t.date)) : null;
+  const extraTag = (t) => (baseDates && t.side !== "deposit" && !baseDates.has(t.date))
+    ? ' <span class="oh-extra">过热</span>' : "";
+  let extraCnt = 0;
+  if (baseDates) extraCnt = trades.filter(t => t.side !== "deposit" && !baseDates.has(t.date)).length;
   if (!trades.length) {
     $("#trades-note").textContent = "";
     $("#trades-table").innerHTML = "<p class='hint'>无交易记录</p>";
     return;
   }
   const cap = 500;   // DOM 渲染上限；净值图打点仍含全部事件
-  $("#trades-note").textContent = trades.length > cap
-    ? `共 ${trades.length} 笔，仅展示前 ${cap} 笔（净值图打点仍含全部）` : "";
+  let note = trades.length > cap
+    ? `共 ${trades.length} 笔，仅展示前 ${cap} 笔（净值图打点仍含全部）。` : "";
+  if (bl) {
+    note += `原版策略（图表「策略」）同期 ${bl.n_rebalance_days} 次调仓 · 过热增强新增 ${extraCnt} 笔（标「过热」）。`;
+  }
+  $("#trades-note").textContent = note.trim();
   let html = `<table><thead><tr><th>#</th><th>日期</th><th>方向</th><th>标的</th>
               <th>权重变化</th><th>变动后权重</th><th>成交价</th><th>当日净值</th></tr></thead><tbody>`;
   trades.slice(0, cap).forEach((t, i) => {
@@ -448,7 +511,7 @@ function renderTradesTable(data) {
                <td>${t.nav != null ? fmtMoney(t.nav) : "—"}</td></tr>`;
     } else {
       const up = t.side === "buy";
-      html += `<tr><td>${i + 1}</td><td>${t.date}</td><td class="${up ? "pos" : "neg"}">${up ? "▲ 买" : "▼ 卖"}</td>
+      html += `<tr><td>${i + 1}</td><td>${t.date}</td><td class="${up ? "pos" : "neg"}">${up ? "▲ 买" : "▼ 卖"}${extraTag(t)}</td>
                <td>${esc(t.ticker || "")}</td>
                <td class="${up ? "pos" : "neg"}">${fmtPct(t.delta, 1)}</td>
                <td>${fmtPct(t.weight_after, 0)}</td>
