@@ -239,22 +239,36 @@ def run_backtest(
         merged_tickers = list(dict.fromkeys(
             [t.upper() for t in tickers] + _extra_assets(clean_params)))
 
-        # 均线全历史预热(默认开,对齐外部回测站口径):指标/均线计算的数据起点
-        # 比账户窗口提前「最大回看窗 × 7/5」自然日,窗口起点当天均线已就绪;
-        # 净值与全部统计仍从窗口起点起算(=窗口起点时信号已在场,nav 切片计价)。
-        # 老哲学保留:默认不主动吃进 1991-1999 的 NDX 双重桥接段 —— 预热起点
-        # clamp 到 QQQ 上市日;用户显式填早于上市日的窗口视为授权,不再 clamp。
+        # 均线全历史预热(默认开,对齐外部回测站口径)。全程精确、零估算:
+        # ① 此处:在主标的本地全史 index 上按交易日回数 prewarm_n 根,精确得出
+        #    向 prepare_prices 要料的起点(读多少原料)。曾经用自然日换算公式
+        #    估原料上界(500×7/5+7=707 天仅折 489 根)造成 MA500 迟到 11 个
+        #    交易日、恐慌分支静默失效 —— 2026-10-10 物理删除,精确量必须精确算。
+        # ② build 前:以矩阵真实 index 再精确对齐并裁剪、不足则硬披露(矩阵是
+        #    多标的 union 日历,可能与单标的探测日历有微差,最终权威以矩阵为准;
+        #    两段方向一致、宁多勿少,永不产生静默缺口)。
+        # 老哲学保留:窗口起点 ≥ QQQ 上市日时,预热不吃 1991-1999 的 NDX 双重
+        # 桥接段(floor = QQQ 上市日);用户显式填更早的窗口视为授权,不再 clamp。
         prewarm_n = int(strategy().warmup_days(clean_params)) if prewarm else 0
-        warm_start = effective_start
-        if prewarm_n > 0 and effective_start is not None:
-            floor = synthetic.QQQ_LISTING
-            warm_ts = pd.to_datetime(effective_start) - pd.Timedelta(
-                days=int(prewarm_n * 7 / 5) + 7)
-            if warm_ts < floor and pd.to_datetime(effective_start) >= floor:
-                warm_ts = floor
-            warm_start = warm_ts.strftime("%Y-%m-%d")
+        probe_start = effective_start
+        if prewarm_n > 0 and effective_start is not None and tickers:
+            t0 = tickers[0].upper()
+            # 探测源模拟 prepare_prices 的替换决策:可能需要早期段时用 SYNTH
+            # 拼接的全史日历(index ⊇ 真实段,回数宁多勿少方向安全),否则真实
+            probe = None
+            if t0 == "TQQQ" and use_synth_tqqq != "never" and _synth_health_ok():
+                probe = store.read_ohlcv(synthetic.SYNTH_SPY_ID)
+            if probe is None or probe.empty:
+                probe = store.read_ohlcv(t0)
+            if probe is not None and not probe.empty:
+                pidx = probe.index
+                pos = int(pidx.searchsorted(pd.to_datetime(effective_start)))
+                lo = (int(pidx.searchsorted(synthetic.QQQ_LISTING))
+                      if pd.to_datetime(effective_start) >= synthetic.QQQ_LISTING else 0)
+                # 回数不够(或被 floor 挡住)就吃到可行最早;不足留给矩阵段披露
+                probe_start = str(pidx[max(lo, pos - prewarm_n)].date())
         prices, prices_open, data_notes = prepare_prices(
-            merged_tickers, warm_start, end, use_synth_tqqq)
+            merged_tickers, probe_start, end, use_synth_tqqq)
 
         # 公平性对齐:窗口末端截到主标的的数据末日(混合矩阵中辅助/基准资产可能
         # 有更新鲜的数据 —— 如 QQQ 到 10-08 而 TQQQ 只到 10-07 —— 让基准比主策略
@@ -280,6 +294,36 @@ def run_backtest(
             run.start = str(prices.index[0].date())
         if not end or prices.index[-1].date().isoformat() != (end or ""):
             run.end = effective_end
+
+        # 预热精确对齐(②段,最终权威):探测 index 已精确要料,此处以矩阵真实
+        # index(多标的 union 日历)按交易日回数 —— 恰好保留 prewarm_n 根预热,
+        # 使 min_periods=prewarm_n 的均线在窗口首日必然成形。多给的原料裁掉
+        # (rolling(n) 数学上与预热起点无关,裁剪不改变窗口内任何信号值);
+        # 原料客观不足(本地数据不够长/被 floor 挡住)则保留全部并硬披露,
+        # 禁止静默。
+        if prewarm_n > 0 and effective_start is not None:
+            win_ts = pd.to_datetime(effective_start)
+            pos = int(prices.index.searchsorted(win_ts))
+            warm_exact = pos >= prewarm_n - 1
+            # 窗口首日均线成形 ⇔ 首日之前+当日 ≥ n 根 ⇔ pos ≥ n-1
+            # （rolling 第 n 根出值；pos = n-1 时窗口首日恰是第 n 根）
+            if warm_exact:
+                exact_start = prices.index[max(0, pos - prewarm_n)]
+                prices = prices.loc[exact_start:]
+                if prices_open is not None:
+                    prices_open = prices_open.loc[exact_start:]
+            else:
+                ready_i = prewarm_n - 1
+                ready_date = (prices.index[ready_i].date()
+                              if len(prices.index) > ready_i else None)
+                data_notes.append(
+                    f"⚠ 预热不足：窗口起点前数据仅 {pos} 根（需 {prewarm_n} 根，"
+                    f"本地数据从 {prices.index[0].date()} 起）。"
+                    + (f"均线于 {ready_date} 才成形，此前趋势/恐慌/过热分支"
+                       "均不可用，信号将系统性推迟——如需精确口径请提供更早数据"
+                       "或后移窗口。" if ready_date else
+                       "均线在整个窗口内无法成形，策略信号全部失效。")
+                )
 
         built = strategy().build(prices, clean_params)
 
@@ -317,11 +361,14 @@ def run_backtest(
                 # 事件日=成交日,天然晚于信号日 ≥ 窗口首日+1(预热段权重恒0),此处防御性兜底
                 result.trades = [t for t in result.trades
                                  if t.date >= str(win_ts.date())]
-                data_notes.append(
-                    f"ℹ 均线全历史预热：均线自窗口前数据计算(提前约 {prewarm_n} 个交易日,"
-                    f"指标起点 {prices.index[0].date()})，账户从 {result.nav.index[0].date()} "
-                    "按当日信号状态进场（结果与预热起点无关）。"
-                )
+                # 精确裁剪成功才可断言「首日成形」；预热不足时 ⚠ 已在裁剪段披露，不重复
+                if warm_exact:
+                    data_notes.append(
+                        f"ℹ 均线全历史预热：均线自窗口前数据计算(按真实交易日历精确回数,"
+                        f"窗口首日均线必然成形，指标起点 {prices.index[0].date()})，"
+                        f"账户从 {result.nav.index[0].date()} "
+                        "按当日信号状态进场（结果与预热起点无关）。"
+                    )
                 if not start:
                     run.start = str(result.nav.index[0].date())
         perf = compute_metrics(result, prices)

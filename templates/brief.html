@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% block title %}每日消息 · {{ app_name }}{% endblock %}
 {% block content %}
+<section class="panel" id="ma-reminder-panel">
+  <h2>📈 当日策略提醒 <span class="hint" id="ma-asof"></span></h2>
+  <div id="ma-reminder"><p class="hint">加载中…</p></div>
+  <p class="hint">口径:t 日收盘信号 → t+1 开盘成交(与回测引擎一致)。价格为本地真实行情
+    (腾讯未复权);均线 = 200/500 个收盘价的算术平均,与券商图核对差 &lt;1% 属正常
+    (券商前复权含分红微调,实测 200MA 差 0.08%/500MA 差 0.27%;策略阈值 ±20-50%,
+    不影响任何买卖判定),差 &gt;1% 才是数据异常。数据缺失时直接报错,不显示替代数据。</p>
+</section>
 <p id="brief-toolbar" style="display:none">
   <button class="primary" style="width:auto;padding:6px 12px;" onclick="backfillEvents()">
     回填最近 1 个月历史消息</button>

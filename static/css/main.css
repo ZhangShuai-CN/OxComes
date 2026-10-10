@@ -99,6 +99,12 @@ h4.sub-title { margin: 2px 0 10px; font-size: 13px; font-weight: 600; color: var
              border-bottom: 1px solid var(--border); font-size: 13px; }
 .event-date { color: var(--text-dim); min-width: 48px; }
 .event-cat { min-width: 64px; font-size: 12px; }
+/* 当日策略提醒卡(brief 页) */
+.ma-card { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.ma-name { font-size: 13px; color: var(--text); margin-bottom: 4px; }
+.ma-action { font-size: 15px; font-weight: 600; margin: 4px 0; }
+.ma-dist { display: flex; gap: 8px; align-items: baseline; padding: 3px 0;
+           font-size: 13px; flex-wrap: wrap; }
 .mbar { background: var(--panel-2); border-radius: 4px; height: 14px; overflow: hidden; }
 .mbar-fill { height: 100%; border-radius: 4px; }
 .mbar-fill.up { background: var(--up); }

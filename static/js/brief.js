@@ -6,6 +6,10 @@
 
 const $ = (s) => document.querySelector(s);
 
+const escBrief = (s) => String(s).replace(/[&<>"]/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmtNum = (v) => v == null ? "—" : Number(v).toLocaleString("en-US");
+
 const CATS = [
   { id: "earnings" },
   { id: "ipo" },
@@ -80,4 +84,40 @@ async function backfillEvents() {
   loadBrief();
 }
 
+// ---- 当日策略提醒(ma200_panic 双形态;无数据=整面板隐藏,不占位) ----
+async function loadMaSignal() {
+  const panel = $("#ma-reminder-panel");
+  try {
+    const d = await fetch("/api/backtest/ma_signal").then(r => r.json());
+    if (!d || !d.ok) {
+      panel.querySelector(".hint").textContent = "❌ " + (d && d.error || "策略提醒数据不可用");
+      return;
+    }
+    const chg = d.px_chg_pct;
+    const chgTxt = (chg == null) ? "" :
+      ` 昨日 ${d.as_of.slice(5)} TQQQ <span class="${chg >= 0 ? "pos" : "neg"}">${chg >= 0 ? "+" : ""}${chg}%</span> 收 $${fmtNum(d.px)}`;
+    const asof = $("#ma-asof");
+    asof.innerHTML = `数据截至 ${d.as_of}:${chgTxt}`
+      + (d.stale_days > 4 ? ` · <span class="warn">⚠ 已 ${d.stale_days} 天未更新</span>` : "");
+    const cls = { buy: "pos", sell: "neg", hold: "", wait: "warn" };
+    const pos = d.px_ratio == null ? "" :
+      `收盘 $${fmtNum(d.px)} · 200MA $${fmtNum(d.ma200)}(现价/200MA = ×${d.px_ratio}) · 500MA $${fmtNum(d.ma500)}`;
+    $("#ma-reminder").innerHTML = (d.strategies || []).map(s => `
+      <div class="ma-card">
+        <div class="ma-name">TQQQ · ${escBrief(s.name)}</div>
+        <div class="ma-action ${cls[s.action] || ""}">${escBrief(s.action_text)}</div>
+        <div class="hint">${pos}${s.last_flip ? ` · 最近翻转: ${s.last_flip[0]} → ${s.last_flip[1]}` : ""}</div>
+        ${(s.distances || []).map(x => `
+          <div class="ma-dist">${escBrief(x.label)}:
+            <b class="${x.pct >= 0 ? "pos" : "neg"}">${x.pct >= 0 ? "+" : ""}${x.pct}%</b> → $${fmtNum(x.target)}
+            ${x.note ? `<span class="hint">(${escBrief(x.note)})</span>` : ""}</div>`).join("")}
+      </div>`).join("");
+  } catch (e) {
+    console.error("策略提醒加载失败:", e);
+    $("#ma-reminder").innerHTML =
+      "<p class='hint warn'>❌ 策略提醒加载失败(本地数据/服务不可用),不显示替代数据。</p>";
+  }
+}
+
 loadBrief();
+loadMaSignal();
