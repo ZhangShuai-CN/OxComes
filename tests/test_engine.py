@@ -168,3 +168,125 @@ def test_next_open_requires_open_matrix():
         pass
     else:
         raise AssertionError("next_open 缺开盘价矩阵未报错")
+
+
+# ───────── 交易事件提取（TradeEvent / trades）─────────
+
+def test_trades_buy_hold_close_single_entry():
+    """close 口径 buy_hold：恰 1 条建仓 buy，事件日=信号日+1，价=事件日收盘。"""
+    px = _prices([100.0, 101, 102, 99])
+    w = pd.DataFrame({"A": 1.0}, index=px.index)
+    res = run(px, w, BacktestConfig(rebalance_cost_bps=0.0, **CLOSE_CFG))
+    assert len(res.trades) == 1
+    t = res.trades[0]
+    assert t.side == "buy" and t.ticker == "A"
+    assert t.date == str(px.index[1].date())       # 信号(t1)+1 → t2 建仓
+    assert t.price == pytest.approx(101.0)          # 事件日收盘
+    assert t.delta == pytest.approx(1.0) and t.weight_after == pytest.approx(1.0)
+    assert t.nav == pytest.approx(float(res.nav.iloc[1]))
+
+
+def test_trades_buy_sell_pair_close():
+    """0→1→0 切换：买/卖各 1 条，事件日=信号日+1，delta=±1，价=各自事件日收盘。"""
+    px = _prices([100.0, 101, 102, 99, 105])
+    w = pd.DataFrame(0.0, index=px.index, columns=["A"])
+    w.iloc[1:3] = 1.0                              # t2 信号建仓、t4 信号清仓
+    res = run(px, w, BacktestConfig(rebalance_cost_bps=0.0, **CLOSE_CFG))
+    assert len(res.trades) == 2
+    buy, sell = res.trades
+    assert buy.side == "buy" and buy.date == str(px.index[2].date())
+    assert buy.price == pytest.approx(102.0)
+    assert sell.side == "sell" and sell.date == str(px.index[4].date())
+    assert sell.price == pytest.approx(105.0)
+    assert sell.delta == pytest.approx(-1.0) and sell.weight_after == pytest.approx(0.0)
+
+
+def test_trades_next_open_price_is_event_day_open():
+    """next_open：成交价=事件日开盘（≠当日收盘）；卖价同为开盘。"""
+    opens = [100.0, 90, 99, 80, 88]
+    closes = [100.0, 99, 80, 88, 96]
+    C, O = _ohlc(opens, closes)
+    w = pd.DataFrame(0.0, index=C.index, columns=["A"])
+    w.iloc[1:3] = 1.0                              # t2 信号 → t3 开盘建仓；t4 信号 → t5 开盘清仓
+    res = run(C, w, BacktestConfig(rebalance_cost_bps=0.0), prices_open=O)
+    assert len(res.trades) == 2
+    buy, sell = res.trades
+    assert buy.side == "buy" and buy.date == str(C.index[2].date())
+    assert buy.price == pytest.approx(99.0)        # open(t3)=99，区别于 close(t3)=80
+    assert sell.side == "sell" and sell.date == str(C.index[4].date())
+    assert sell.price == pytest.approx(88.0)       # open(t5)=88
+
+
+def test_trades_next_open_missing_open_price_is_none():
+    """next_open：标的缺开盘价（O 矩阵 NaN）→ price=None 而非报错。"""
+    C, O = _ohlc([100.0, 100, 100], [100.0, 100, 100])
+    O.iloc[:, 0] = np.nan                          # 整列缺开盘
+    w = pd.DataFrame({"A": 1.0}, index=C.index)
+    res = run(C, w, BacktestConfig(rebalance_cost_bps=0.0), prices_open=O)
+    assert len(res.trades) == 1
+    assert res.trades[0].price is None
+    assert res.trades[0].side == "buy"
+
+
+def _assert_turnover_consistency(res):
+    """逐日 Σ|delta| ≡ turnover（同源 diff）；无事件的日必为 0（无幽灵交易）。"""
+    by_day: dict = {}
+    for t in res.trades:
+        by_day[t.date] = by_day.get(t.date, 0.0) + abs(t.delta)
+    for dt, tv in res.turnover.items():
+        d = str(dt.date())
+        assert by_day.get(d, 0.0) == pytest.approx(float(tv))
+    no_event = [dt for dt in res.turnover.index if str(dt.date()) not in by_day]
+    assert (res.turnover.loc[no_event] == 0).all()
+
+
+def test_trades_turnover_consistency_close():
+    """一致性不变量：close 口径。"""
+    prices = _prices([100.0, 96, 100, 81, 90, 92, 108])
+    w = pd.DataFrame(0.0, index=prices.index, columns=["A"])
+    w.iloc[2:5] = 1.0
+    res = run(prices, w, BacktestConfig(rebalance_cost_bps=1.0, **CLOSE_CFG))
+    _assert_turnover_consistency(res)
+
+
+def test_trades_turnover_consistency_next_open():
+    """一致性不变量：next_open 口径。"""
+    C, O = _ohlc([100.0, 95, 99, 80, 88, 91, 105], [100.0, 96, 100, 81, 90, 92, 108])
+    w = pd.DataFrame(0.0, index=C.index, columns=["A"])
+    w.iloc[2:5] = 1.0
+    res = run(C, w, BacktestConfig(rebalance_cost_bps=1.0), prices_open=O)
+    _assert_turnover_consistency(res)
+
+
+def test_trades_dca_deposit_events():
+    """DCA：入金日 deposit 事件（amount/nav） + 仅 1 条建仓 buy，不混入交易口径。"""
+    px = _prices([100.0, 110, 121, 133.1])
+    w = pd.DataFrame({"A": 1.0}, index=px.index)
+    cf = pd.Series([100.0, 0.0, 100.0, 0.0], index=px.index)
+    res = run(px, w, BacktestConfig(initial_capital=100.0, rebalance_cost_bps=0.0, **CLOSE_CFG),
+              cashflows=cf)
+    deps = [t for t in res.trades if t.side == "deposit"]
+    buys = [t for t in res.trades if t.side == "buy"]
+    assert len(deps) == 2 and len(buys) == 1
+    assert [t.date for t in deps] == [str(px.index[0].date()), str(px.index[2].date())]
+    assert all(t.amount == pytest.approx(100.0) for t in deps)
+    assert all(t.ticker is None and t.delta is None for t in deps)
+    assert deps[0].nav == pytest.approx(float(res.nav.iloc[0]))
+    assert buys[0].date == str(px.index[1].date())   # t2 建仓
+
+
+def test_trades_same_day_switch_generates_pair():
+    """同日换仓（A 1→0.4 + B 0→0.6）：同日期 1 buy + 1 sell（前端 ◆ 的数据前提）。"""
+    idx = pd.bdate_range("2020-01-01", periods=4)
+    px = pd.DataFrame({"A": [100.0, 101, 102, 103], "B": [50.0, 51, 52, 53]}, index=idx)
+    w = pd.DataFrame(0.0, index=idx, columns=["A", "B"])
+    w.loc[idx[0]:idx[1], "A"] = 1.0                 # 前段满仓 A
+    w.loc[idx[2]:idx[3], "A"] = 0.4                 # t3 信号：A 减 B 加
+    w.loc[idx[2]:idx[3], "B"] = 0.6
+    res = run(px, w, BacktestConfig(rebalance_cost_bps=0.0, **CLOSE_CFG))
+    day3 = [t for t in res.trades if t.date == str(idx[3].date())]
+    sides = sorted(t.side for t in day3)
+    assert sides == ["buy", "sell"]
+    by_tk = {t.ticker: t for t in day3}
+    assert by_tk["A"].delta == pytest.approx(-0.6) and by_tk["A"].weight_after == pytest.approx(0.4)
+    assert by_tk["B"].delta == pytest.approx(0.6) and by_tk["B"].weight_after == pytest.approx(0.6)

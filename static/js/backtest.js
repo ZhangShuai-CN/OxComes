@@ -125,15 +125,16 @@ const fmtNum = (v, d = 2) => Number(v).toFixed(d);
 const fmtMoney = (v) => "$" + Math.round(v).toLocaleString("en-US");
 // 总收益的直观口径：>=10 倍时用倍数（如 76.4x），否则百分比
 const fmtTotal = (tr) => tr >= 9 ? (1 + tr).toFixed(1) + "x" : fmtPct(tr, 1);
+// ticker/系列名拼进 tooltip/表格 HTML 前的转义（防结构字符注入）
+const esc = (s) => String(s).replace(/[<>&"]/g, c =>
+  ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
 
 function perfCards(p, opts = {}) {
   const nm = opts.name ? `${opts.name} ` : "";   // 卡片标注主标的(如 "TQQQ 年化 IRR")
   // 定投等现金流场景:主口径用真钱权 XIRR;等效一次性(cagr)放在 BARRA sub 提示
   const hasCF = p.invested != null && p.xirr != null;
   const irrVal = hasCF ? p.xirr : (p.cagr ?? 0);
-  const irrLabel = hasCF
-    ? `${nm}年化 IRR (XIRR·钱权)<span class="tip" title="XIRR=逐笔现金流的内部收益率,与外部网站定投场景的 IRR / Money-Weighted Return 同口径">↗</span>`
-    : `${nm}年化 IRR (CAGR)<span class="tip" title="无外部现金流时 IRR≡CAGR=(期末/期初)^(1/年数)-1">↗</span>`;
+  const irrLabel = `${nm}年化 IRR`;
   const irrSub = hasCF
     ? `等效一次性年化 ${fmtPct(p.cagr ?? 0, 2)} · 总收益 ${fmtTotal(p.total_return ?? 0)} / ${(p.years ?? 0).toFixed(1)} 年`
     : `总收益 ${fmtTotal(p.total_return ?? 0)} / ${(p.years ?? 0).toFixed(1)} 年`;
@@ -150,6 +151,9 @@ function perfCards(p, opts = {}) {
   cards.push(
     { label: `${nm}最大回撤`, value: fmtPct(p.max_drawdown ?? 0, 1), cls: "neg",
       sub: `Calmar ${fmtNum(p.calmar ?? 0)}` },
+    { label: `${nm}总交易次数`, value: opts.nRebalanceDays != null ? String(opts.nRebalanceDays) : "—",
+      cls: "", sub: `买 ${opts.nBuys ?? 0} 笔 · 卖 ${opts.nSells ?? 0} 笔`
+        + (opts.nDeposits ? ` · 定投入金 ${opts.nDeposits} 期` : "") },
     { label: "Sharpe", value: p.sharpe != null ? fmtNum(p.sharpe) : "—", cls: "",
       sub: `Sortino ${p.sortino != null ? fmtNum(p.sortino) : "—"}` },
     { label: `${nm}年化波动`, value: fmtPct(p.ann_vol ?? 0, 1), cls: "",
@@ -178,10 +182,15 @@ function renderResult(data) {
   const initialValue = p.invested ?? (navVals.length ? navVals[0] : capitalInput);
   // 定投场景分母=总投入(期初+全部定投);纯策略=首日净值(=初始资金)
   const mainName = (data.tickers && data.tickers[0]) || "策略";      // 卡片标注主标的
+  const nDeposits = (data.trades || []).filter(t => t.side === "deposit").length;
   $("#perf-cards").innerHTML = cardsHtml(perfCards(p, {
     name: mainName,
     finalValue: navVals.length ? navVals[navVals.length - 1] : null,
     initialValue,
+    nRebalanceDays: data.n_rebalance_days,
+    nBuys: data.n_buys,
+    nSells: data.n_sells,
+    nDeposits,
   }));
 
   // 基准对照卡（QQQ 等 benchmark 的完整指标，与策略同口径并排）
@@ -194,9 +203,7 @@ function renderResult(data) {
     const bHasCF = bp.invested != null && bp.xirr != null;
     const bInit = bp.invested ?? (bv.length ? bv[0] : capitalInput);
     const irrVal = bHasCF ? bp.xirr : (bp.cagr ?? 0);
-    const irrLabel = bHasCF
-      ? `${name} 年化 IRR (XIRR·钱权)`
-      : `${name} 年化 IRR (CAGR)`;
+    const irrLabel = `${name} 年化 IRR`;
     const irrSub = bHasCF
       ? `等效一次性 ${fmtPct(bp.cagr ?? 0, 2)} · 总收益 ${fmtTotal(bp.total_return ?? 0)} / ${(bp.years ?? 0).toFixed(1)} 年 · 镜像定投`
       : `总收益 ${fmtTotal(bp.total_return ?? 0)} / ${(bp.years ?? 0).toFixed(1)} 年 · 回测窗 ${data.start} → ${data.end}`;
@@ -217,11 +224,12 @@ function renderResult(data) {
 
   renderNavChart(data);
   renderDDChart(data);
-  renderAnnualTable(p, data);
+  renderAnnualChart(data);
   renderDDTable(p);
+  renderTradesTable(data);
 }
 
-let navChart = null, ddChart = null;
+let navChart = null, ddChart = null, annualChart = null;
 
 function renderNavChart(data) {
   navChart = navChart || echarts.init($("#nav-chart"));
@@ -237,6 +245,44 @@ function renderNavChart(data) {
     });
   }
   const dates = data.nav.dates;
+
+  // ---- 交易打点：按日聚合（▲净加仓 / ▼净减仓 / ◆同日双向换仓）+ 定投入金小点 ----
+  // 打点落在 nav 曲线当日值上；y>0 过滤是对数轴的防御（nav 起点即资金，恒正）
+  const navByDate = new Map(dates.map((d, i) => [d, data.nav.values[i]]));
+  const tradesByDay = new Map();          // date -> 当日全部事件（含 deposit），tooltip 用
+  for (const t of (data.trades || [])) {
+    if (!navByDate.has(t.date)) continue; // 事件日不在 nav 曲线上（防御，正常不会发生）
+    tradesByDay.set(t.date, (tradesByDay.get(t.date) || []).concat(t));
+  }
+  const buyPts = [], sellPts = [], bothPts = [], depPts = [];
+  for (const [d, evs] of tradesByDay) {
+    if (!(navByDate.get(d) > 0)) continue;
+    let buy = 0, sell = 0, hasDeposit = false;
+    evs.forEach(t => {
+      if (t.side === "buy") buy += t.delta;
+      else if (t.side === "sell") sell += -t.delta;
+      else hasDeposit = true;
+    });
+    const pt = { value: [d, navByDate.get(d)] };
+    if (hasDeposit) depPts.push(pt);
+    if (buy > 0 && sell > 0) bothPts.push(pt);
+    else if (buy > 0) buyPts.push(pt);
+    else if (sell > 0) sellPts.push(pt);
+    // 纯入金日（权重不变）只画入金点
+  }
+  const tradeSeries = (name, pts, symbol, color, opt = {}) => pts.length ? [{
+    name, type: "scatter", data: pts, symbol,
+    symbolSize: opt.size || 9, symbolRotate: opt.rotate || 0, z: 3,
+    itemStyle: { color, borderColor: "#0d1117", borderWidth: 1 },
+    emphasis: { scale: 1.4 },
+  }] : [];
+  series.push(
+    ...tradeSeries("加仓", buyPts, "triangle", "#3fb950"),
+    ...tradeSeries("减仓", sellPts, "triangle", "#f85149", { rotate: 180 }),
+    ...tradeSeries("双向换仓", bothPts, "diamond", "#d29922"),
+    ...tradeSeries("定投入金", depPts, "circle", "rgba(88,166,255,0.85)", { size: 6 }),
+  );
+
   const marks = [];
   const ddList = (data.perf || {}).drawdown_top5 || [];
   if (ddList.length) {
@@ -256,7 +302,27 @@ function renderNavChart(data) {
     grid: { left: 70, right: 20, top: 30, bottom: 60 },
     legend: { top: 0, textStyle: { color: "#8b949e" } },
     tooltip: { trigger: "axis", backgroundColor: "#1c2128", borderColor: "#2d333b",
-               textStyle: { color: "#e6edf3" } },
+               textStyle: { color: "#e6edf3" },
+               // 当日成交明细并入 axis tooltip（散点系列的数值与曲线重复，不单列行）
+               formatter: (params) => {
+                 const ps = Array.isArray(params) ? params : [params];
+                 const date = ps[0].axisValue;
+                 let html = `<b>${date}</b>`;
+                 ps.forEach(p => {
+                   if (p.seriesType === "scatter") return;
+                   const v = Array.isArray(p.value) ? p.value[1] : p.value;
+                   if (v == null) return;
+                   html += `<br>${p.marker} ${esc(p.seriesName)} ${fmtMoney(v)}`;
+                 });
+                 const evs = tradesByDay.get(date);
+                 if (evs) html += evs.map(t =>
+                   t.side === "deposit"
+                     ? `<br><span style="color:#58a6ff">⊕ 定投入金 ${fmtMoney(t.amount ?? 0)}</span>`
+                     : `<br>${t.side === "buy" ? "▲" : "▼"} ${esc(t.ticker)} 权重 ${fmtPct(t.delta, 1)} → ${fmtPct(t.weight_after, 0)}`
+                       + (t.price != null ? ` @ $${t.price.toFixed(2)}` : "")
+                 ).join("");
+                 return html;
+               } },
     xAxis: { type: "category", data: dates, axisLabel: { color: "#8b949e" } },
     yAxis: {
       type: "log", axisLabel: { color: "#8b949e",
@@ -291,23 +357,42 @@ function renderDDChart(data) {
   }, { notMerge: true });
 }
 
-function renderAnnualTable(p, data) {
-  const ar = p.annual_returns || {};
-  const colNames = ["策略", ...Object.keys(data.benchmarks || {})];
+function renderAnnualChart(data) {
+  const ar = (data.perf || {}).annual_returns || {};
+  const benches = Object.entries(data.benchmarks || {});
+  // 年份 = 策略与全部基准年度收益的并集（有数据的年份才出柱）
   const years = [...new Set([
     ...Object.keys(ar),
-    ...Object.values(data.benchmarks || {}).flatMap(b => Object.keys(b.perf.annual_returns || {})),
+    ...benches.flatMap(([, b]) => Object.keys(b.perf.annual_returns || {})),
   ])].sort();
-  let html = "<table><thead><tr><th>年份</th>" + colNames.map((c, i) => `<th>${i === 0 ? "策略" : c}</th>`).join("") + "</tr></thead><tbody>";
-  for (const y of years) {
-    const cells = colNames.map((c, i) => {
-      const m = i === 0 ? ar[y] : ((data.benchmarks[c] || {}).perf.annual_returns || {})[y];
-      const v = m != null ? fmtPct(m, 1) : "—";
-      return `<td class="${m != null && m < 0 ? "neg" : "pos"}">${v}</td>`;
-    });
-    html += `<tr><td>${y}</td>${cells.join("")}</tr>`;
+  annualChart = annualChart || echarts.init($("#annual-chart"));
+  // 系列固定配色：策略=蓝（与净值图主曲线同色），基准轮转黄/紫/粉/青；
+  // 正负由柱向表达（0 轴上下），颜色只负责区分系列
+  const barSeries = (name, seriesAR) => ({
+    name, type: "bar",
+    data: years.map(y => seriesAR[y] ?? null),   // 该年无数据 → 空柱
+    barMaxWidth: 34,
+  });
+  const series = [barSeries(
+    Object.keys(data.benchmarks).length ? "策略" : "组合", ar)];
+  for (const [name, b] of benches) {
+    series.push(barSeries(name, b.perf.annual_returns || {}));
   }
-  $("#annual-table").innerHTML = html + "</tbody></table>";
+  annualChart.setOption({
+    animation: false,
+    color: ["#58a6ff", "#d29922", "#a371f7", "#db61a2", "#39c5cf"],
+    grid: { left: 56, right: 20, top: 30, bottom: 30 },
+    legend: { top: 0, textStyle: { color: "#8b949e" } },
+    tooltip: { trigger: "axis", backgroundColor: "#1c2128", borderColor: "#2d333b",
+               textStyle: { color: "#e6edf3" },
+               valueFormatter: v => v == null ? "—" : fmtPct(v, 1) },
+    xAxis: { type: "category", data: years, axisLabel: { color: "#8b949e" } },
+    yAxis: {
+      axisLabel: { color: "#8b949e", formatter: v => (v * 100).toFixed(0) + "%" },
+      splitLine: { lineStyle: { color: "#21262d" } },
+    },
+    series,
+  }, { notMerge: true });
 }
 
 function renderDDTable(p) {
@@ -324,9 +409,42 @@ function renderDDTable(p) {
   $("#dd-table").innerHTML = html + "</tbody></table>";
 }
 
+function renderTradesTable(data) {
+  const trades = data.trades || [];
+  document.getElementById("trades-count").textContent = trades.length;
+  if (!trades.length) {
+    $("#trades-note").textContent = "";
+    $("#trades-table").innerHTML = "<p class='hint'>无交易记录</p>";
+    return;
+  }
+  const cap = 500;   // DOM 渲染上限；净值图打点仍含全部事件
+  $("#trades-note").textContent = trades.length > cap
+    ? `共 ${trades.length} 笔，仅展示前 ${cap} 笔（净值图打点仍含全部）` : "";
+  let html = `<table><thead><tr><th>#</th><th>日期</th><th>方向</th><th>标的</th>
+              <th>权重变化</th><th>变动后权重</th><th>成交价</th><th>当日净值</th></tr></thead><tbody>`;
+  trades.slice(0, cap).forEach((t, i) => {
+    if (t.side === "deposit") {
+      html += `<tr><td>${i + 1}</td><td>${t.date}</td><td style="color:#58a6ff">⊕ 入金</td><td>—</td>
+               <td style="color:#58a6ff">${fmtMoney(t.amount ?? 0)}</td><td>—</td><td>—</td>
+               <td>${t.nav != null ? fmtMoney(t.nav) : "—"}</td></tr>`;
+    } else {
+      const up = t.side === "buy";
+      html += `<tr><td>${i + 1}</td><td>${t.date}</td><td class="${up ? "pos" : "neg"}">${up ? "▲ 买" : "▼ 卖"}</td>
+               <td>${esc(t.ticker || "")}</td>
+               <td class="${up ? "pos" : "neg"}">${fmtPct(t.delta, 1)}</td>
+               <td>${fmtPct(t.weight_after, 0)}</td>
+               <td>${t.price != null ? "$" + t.price.toFixed(2) : "—"}</td>
+               <td>${t.nav != null ? fmtMoney(t.nav) : "—"}</td></tr>`;
+    }
+  });
+  $("#trades-table").innerHTML = html + "</tbody></table>";
+}
+
 loadStrategies();
 loadDefaultRange();
-window.addEventListener("resize", () => { navChart && navChart.resize(); ddChart && ddChart.resize(); });
+window.addEventListener("resize", () => {
+  navChart && navChart.resize(); ddChart && ddChart.resize(); annualChart && annualChart.resize();
+});
 
 // ---------- 网格扫描（Phase 4）----------
 $("#scan-btn").addEventListener("click", async () => {

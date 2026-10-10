@@ -73,6 +73,7 @@ button.primary:disabled { background: var(--border); cursor: not-allowed; }
 .pos { color: var(--up); } .neg { color: var(--down); } .warn { color: var(--warn); }
 
 .chart-lg { width: 100%; height: 420px; }
+.chart-md { width: 100%; height: 260px; }
 .chart-sm { width: 100%; height: 200px; }
 
 .synth-note {

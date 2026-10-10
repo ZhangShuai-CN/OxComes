@@ -38,7 +38,7 @@
     <label class="field">
       <span>成交价口径</span>
       <select id="execution">
-        <option value="next_open" selected>次日开盘（外部网站口径）</option>
+        <option value="next_open" selected>次日开盘</option>
         <option value="close">收盘结算</option>
       </select>
     </label>
@@ -59,12 +59,17 @@
     <div class="panel"><div id="dd-chart" class="chart-sm"></div></div>
     <div class="panel">
       <h3>年度收益</h3>
-      <div id="annual-table" class="table-wrap"></div>
+      <div id="annual-chart" class="chart-md"></div>
     </div>
     <div class="panel">
       <h3>最大回撤 Top5</h3>
       <div id="dd-table" class="table-wrap"></div>
     </div>
+    <details class="panel" id="trades-panel">
+      <summary style="cursor:pointer;font-size:14px;">交易明细（共 <span id="trades-count">0</span> 笔）</summary>
+      <p class="hint" id="trades-note"></p>
+      <div id="trades-table" class="table-wrap"></div>
+    </details>
     <details class="panel">
       <summary style="cursor:pointer;font-size:14px;">🔧 网格扫描（当前策略的 spec.grid 参数组）</summary>
       <p class="hint" id="scan-desc"></p>

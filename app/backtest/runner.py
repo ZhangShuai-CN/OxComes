@@ -34,7 +34,13 @@ class BacktestRun:
     tickers: list = field(default_factory=list)
     start: str = ""
     end: str = ""
+    trades: list = field(default_factory=list)         # list[engine.TradeEvent]（已按窗口过滤）
+    n_rebalance_days: int = 0              # 总交易次数口径：有成交发生的交易日数
+    n_buys: int = 0                        # 逐笔买入笔数（不含定投入金）
+    n_sells: int = 0                       # 逐笔卖出笔数
     error: Optional[str] = None
+
+    TRADES_CAP = 20_000                    # payload 安全阀（最坏 DCA 周定投 30 年 ≈1561 笔）
 
     def to_api_payload(self) -> dict:
         if not self.ok:
@@ -50,6 +56,11 @@ class BacktestRun:
             "nav": {"dates": [str(d.date()) for d in self.nav.index],
                     "values": [round(float(v), 2) for v in self.nav.values]},
             "perf": self.perf,
+            "n_rebalance_days": self.n_rebalance_days,
+            "n_buys": self.n_buys,
+            "n_sells": self.n_sells,
+            "trades": [t.to_dict() for t in self.trades[:self.TRADES_CAP]],
+            "trades_truncated": len(self.trades) > self.TRADES_CAP,
             "benchmarks": {
                 name: {
                     "nav": {"dates": [str(d.date()) for d in s.index],
@@ -292,12 +303,16 @@ def run_backtest(
                             cashflows=built.cashflows, prices_open=prices_open)
 
         # 预热段仓位已硬置零:矩阵前段(窗口前)策略空仓,nav 从窗口起点才随信号变化。
-        # 净值/收益切回用户窗口(分母=窗口首日 nav,即资金起点)
+        # 净值/收益/换手/成交事件切回用户窗口(分母=窗口首日 nav,即资金起点)
         if prewarm_n > 0 and effective_start is not None:
             win_ts = pd.to_datetime(effective_start)
             if result.nav.index[0] < win_ts:
                 result.nav = result.nav.loc[win_ts:]
                 result.returns = result.returns.loc[win_ts:]
+                result.turnover = result.turnover.loc[win_ts:]
+                # 事件日=成交日,天然晚于信号日 ≥ 窗口首日+1(预热段权重恒0),此处防御性兜底
+                result.trades = [t for t in result.trades
+                                 if t.date >= str(win_ts.date())]
                 data_notes.append(
                     f"ℹ 均线全历史预热：均线自窗口前数据计算(提前约 {prewarm_n} 个交易日,"
                     f"指标起点 {prices.index[0].date()})，账户从 {result.nav.index[0].date()} "
@@ -308,6 +323,13 @@ def run_backtest(
         perf = compute_metrics(result, prices)
         run.ok, run.nav, run.ret, run.perf = True, result.nav, result.returns, perf
         run.notes = list(built.notes) + list(data_notes)
+
+        # 交易统计:总交易次数口径=有成交发生的交易日数(同 crypto 页 n_trades);
+        # 逐笔买卖数与成交事件(含 DCA deposit)一并下发前端(打点/明细表)
+        run.trades = result.trades
+        run.n_rebalance_days = int((result.turnover > 0).sum())
+        run.n_buys = sum(1 for t in result.trades if t.side == "buy")
+        run.n_sells = sum(1 for t in result.trades if t.side == "sell")
 
         # 多标的默认等权=每日再平衡的组合语义披露(用户两次踩坑,强制弹出)
         if strategy_id in ("buy_hold", "dca") and len(tickers) > 1:

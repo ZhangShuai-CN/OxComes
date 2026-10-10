@@ -185,6 +185,9 @@ def cmd_backtest(args):
         print(f"\n  组合  {_fmt_perf(result.perf or {})}")
     for name, m in result.bench_perf.items():
         print(f"  {name:<6} {_fmt_perf(m)}")
+    print(f"  交易  调仓 {result.n_rebalance_days} 日 · 买 {result.n_buys} 笔 · 卖 {result.n_sells} 笔"
+          + (f" · 定投入金 {sum(1 for t in result.trades if t.side == 'deposit')} 期"
+             if any(t.side == "deposit" for t in result.trades) else ""))
     dd = (result.perf or {}).get("drawdown_top5") or []
     if dd:
         print("\nTop 回撤:")

@@ -131,7 +131,8 @@ async def scan(req: ScanRequest):
                          "cagr": result.perf.get("cagr"),
                          "mdd": result.perf.get("max_drawdown"),
                          "sharpe": result.perf.get("sharpe"),
-                         "calmar": result.perf.get("calmar")})
+                         "calmar": result.perf.get("calmar"),
+                         "n_rebalance_days": result.n_rebalance_days})
     rows.sort(key=lambda r: (r.get("sharpe") if r.get("sharpe") is not None else -99),
                           reverse=True)
     return {"ok": True, "n": len(combos), "rows": rows[:50]}

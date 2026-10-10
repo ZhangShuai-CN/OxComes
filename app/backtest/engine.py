@@ -38,6 +38,41 @@ class BacktestConfig:
 
 
 @dataclass
+class TradeEvent:
+    """单笔成交事件（从实际执行权重矩阵的相邻行 diff 提取）。
+
+    date = 事件日 = 成交日：close 口径为当日收盘结算、next_open 口径为当日开盘成交
+    （两者都是 w_exec 相邻行发生变化的那个 t，即换手成本入账的同一行）。
+    side="deposit" 为 DCA 外部入金事件（非权重变化，不计入交易笔数口径）。
+    """
+    date: str                              # YYYY-MM-DD
+    ticker: Optional[str] = None           # 标的；deposit 事件为 None
+    side: str = "buy"                      # "buy" | "sell" | "deposit"
+    delta: Optional[float] = None          # 权重变化（带符号，+买 -卖）；deposit=None
+    weight_after: Optional[float] = None   # 变动后该标的权重；deposit=None
+    amount: Optional[float] = None         # deposit 入金金额($)；trade=None
+    price: Optional[float] = None          # 成交价：close=事件日收盘 / next_open=事件日开盘
+    nav: Optional[float] = None            # 事件日账户净值($)
+
+    def to_dict(self) -> dict:
+        """JSON 序列化：跳过 None 键 + 数值取整（控制 payload 体积）。"""
+        d: dict = {"date": self.date, "side": self.side}
+        if self.ticker is not None:
+            d["ticker"] = self.ticker
+        if self.delta is not None:
+            d["delta"] = round(self.delta, 6)
+        if self.weight_after is not None:
+            d["weight_after"] = round(self.weight_after, 4)
+        if self.amount is not None:
+            d["amount"] = round(self.amount, 2)
+        if self.price is not None:
+            d["price"] = round(self.price, 4)
+        if self.nav is not None:
+            d["nav"] = round(self.nav, 2)
+        return d
+
+
+@dataclass
 class BacktestResult:
     nav: pd.Series                      # 净值曲线（index=交易日）
     returns: pd.Series                  # 组合日收益
@@ -45,6 +80,7 @@ class BacktestResult:
     turnover: pd.Series                 # 日换手（绝对权重变化和）
     cashflows: Optional[pd.Series] = None
     invested: Optional[float] = None    # DCA 总投入本金（含 initial）
+    trades: list = field(default_factory=list)  # list[TradeEvent] 成交事件（含 deposit）
     drawdown: pd.Series = field(init=False)  # 水下曲线（0 之上）
 
     def __post_init__(self):
@@ -75,6 +111,50 @@ def _normalize(w: pd.DataFrame, allow_leverage: bool) -> pd.DataFrame:
     gross = w.abs().sum(axis=1)
     scale = 1.0 / gross.where(gross > 1.0, 1.0)  # 只降不升（留现金）
     return w.mul(scale, axis=0)
+
+
+def _extract_trades(
+    w_exec: pd.DataFrame,
+    price: pd.DataFrame,
+    nav: pd.Series,
+    cf: Optional[pd.Series],
+    eps: float = 1e-9,
+) -> list:
+    """从实际执行权重矩阵提取逐笔成交事件（纯后处理，不碰 core 运算路径）。
+
+    一致性不变量：逐日 Σ|delta| ≡ turnover —— 两者同源于 w_exec 的相邻行 diff
+    （t2 建仓 / next_open 口径的 t 开盘换仓 / 末日末段换仓均被覆盖，不重不漏）。
+
+    price 矩阵须与 nav 同一坐标系（引擎内 reindex 对齐后的矩阵）：
+      close 口径传对齐后收盘价（成交价=事件日收盘），next_open 传对齐后开盘价
+      O（成交价=事件日开盘）。缺价（NaN）→ price=None。
+    cashflows 非空时，入金日追加 side="deposit" 事件（不计入逐笔买卖口径）。
+    """
+    events: list = []
+    diff = w_exec.sub(w_exec.shift(1).fillna(0.0))
+    coords = np.argwhere(diff.abs().to_numpy() > eps)
+    for row, col in coords:
+        t = w_exec.index[row]
+        tk = w_exec.columns[col]
+        d = float(diff.iat[row, col])
+        p = price.iat[row, col]
+        events.append(TradeEvent(
+            date=str(t.date()),
+            ticker=str(tk),
+            side="buy" if d > 0 else "sell",
+            delta=d,
+            weight_after=float(w_exec.iat[row, col]),
+            price=(float(p) if pd.notna(p) else None),
+            nav=float(nav.loc[t]),
+        ))
+    if cf is not None:
+        for t, v in cf[cf != 0].items():
+            events.append(TradeEvent(
+                date=str(t.date()), ticker=None, side="deposit",
+                amount=float(v), nav=float(nav.loc[t]),
+            ))
+    events.sort(key=lambda e: (e.date, e.ticker or ""))
+    return events
 
 
 def run(
@@ -153,6 +233,7 @@ def _run_close(
         turnover=turnover,
         cashflows=cf_series,
         invested=invested_amount,
+        trades=_extract_trades(w_exec, prices, nav, cf_series),
     )
 
 
@@ -236,6 +317,7 @@ def _run_next_open(
         turnover=turnover,
         cashflows=cf_series,
         invested=invested_amount,
+        trades=_extract_trades(w_seg, O, nav, cf_series),
     )
 
 
