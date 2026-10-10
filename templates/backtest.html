@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}回测工作台 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-grid">
+  <!-- 左：参数面板 -->
+  <section class="panel params-panel">
+    <h2>⚙️ 策略与参数</h2>
+    <label class="field">
+      <span>策略</span>
+      <select id="strategy-select"><option value="">加载中…</option></select>
+    </label>
+    <p id="strategy-desc" class="hint"></p>
+    <div id="param-form"></div>
+    <label class="field">
+      <span>主标的（单个，如 TQQQ）</span>
+      <input id="tickers" type="text" value="TQQQ" spellcheck="false">
+    </label>
+    <p class="hint" id="ticker-hint">主标的单个填写。策略所需的信号/防御资产（如 QQQ 的
+      200 日均线）由系统自动加载，无需手动输入。对照用资产放「基准对照」框。</p>
+    <p class="hint">TQQQ 数据模式：<label><input type="radio" name="tqqq-data" value="auto" checked>
+      自动（起点早于本地真实首日时用 QQQ×3 合成拼接）</label>
+      <label><input type="radio" name="tqqq-data" value="always"> 强制合成</label>
+      <label><input type="radio" name="tqqq-data" value="never"> 仅真实（本地 2011-01-26 起）</label>
+    </p>
+    <div class="row2">
+      <label class="field"><span>起始日期</span><input id="start" type="date"></label>
+      <label class="field"><span>结束日期</span><input id="end" type="date"></label>
+    </div>
+    <p class="hint" id="range-hint">日期留空 = 数据全范围（加载时自动回填本地数据最早/最新日）</p>
+    <label class="field">
+      <span>基准对照（逗号分隔，可空）</span>
+      <input id="benchmarks" type="text" value="QQQ" spellcheck="false">
+    </label>
+    <div class="row2">
+      <label class="field"><span>初始资金($)</span><input id="capital" type="number" value="10000"></label>
+      <label class="field"><span>换手成本(bps)</span><input id="cost" type="number" value="2" step="0.5"></label>
+    </div>
+    <label class="field">
+      <span>成交价口径</span>
+      <select id="execution">
+        <option value="next_open" selected>次日开盘（外部网站口径）</option>
+        <option value="close">收盘结算</option>
+      </select>
+    </label>
+    <p class="hint">「次日开盘」= t 日收盘信号 → t+1 开盘成交（起始日为数据首日时,买入发生在
+      次日开盘；结束日以收盘清算）；「收盘」= 原引擎语义（t+1 收盘起算收盘→收盘）。
+      两者对买入持有的总收益差 ≈ 起始日次日的盘口跳空。</p>
+    <button id="run-btn" class="primary">▶ 运行回测</button>
+    <div id="run-status" class="hint"></div>
+  </section>
+
+  <!-- 右：结果区 -->
+  <section class="results">
+    <div id="notes" class="synth-note" style="display:none"></div>
+    <div id="perf-cards" class="stat-row"></div>
+    <h3 id="bench-title" style="display:none">基准对照</h3>
+    <div id="bench-cards" class="stat-row"></div>
+    <div class="panel"><div id="nav-chart" class="chart-lg"></div></div>
+    <div class="panel"><div id="dd-chart" class="chart-sm"></div></div>
+    <div class="panel">
+      <h3>年度收益</h3>
+      <div id="annual-table" class="table-wrap"></div>
+    </div>
+    <div class="panel">
+      <h3>最大回撤 Top5</h3>
+      <div id="dd-table" class="table-wrap"></div>
+    </div>
+    <details class="panel">
+      <summary style="cursor:pointer;font-size:14px;">🔧 网格扫描（当前策略的 spec.grid 参数组）</summary>
+      <p class="hint" id="scan-desc"></p>
+      <button id="scan-btn" class="primary" style="width:auto;padding:8px 16px;">▶ 扫描</button>
+      <span id="scan-status" class="hint"></span>
+      <div id="scan-result" class="table-wrap"></div>
+    </details>
+  </section>
+</div>
+<script src="/static/js/backtest.js"></script>
+{% endblock %}

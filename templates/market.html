@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}美股总览 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="stat-row" id="mkt-cards"></div>
+<section class="panel">
+  <h2>🗺️ 美股市场热力图
+    <span class="hint" id="hm-meta">加载中…</span></h2>
+  <p>
+    <label>周期:
+      <select id="hm-period"></select>
+    </label>
+    <span class="hint" style="margin-left:10px">色 = 涨跌幅(深红深绿 = 大跌大涨) · 块大小 = 示意权重
+      (市值版待接 AUM 数据)</span>
+  </p>
+  <div id="heatmap" class="chart-lg"></div>
+</section>
+<div class="two-col">
+  <section class="panel">
+    <h2>📈 市场宽度（RSP/SPY 等权-市值加权比）</h2>
+    <div id="breadth-chart" class="chart-md"></div>
+  </section>
+  <section class="panel">
+    <h2>😨 VIX 恐慌指数 <span class="hint" id="vix-meta"></span></h2>
+    <div id="vix-chart" class="chart-md"></div>
+  </section>
+</div>
+<script src="/static/js/market.js"></script>
+{% endblock %}

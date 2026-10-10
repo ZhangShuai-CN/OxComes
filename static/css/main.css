@@ -1,0 +1,106 @@
+/* 美股+BTC 投资分析平台 · 金融看板暗色主题 */
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --panel-2: #1c2128;
+  --border: #2d333b;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #58a6ff;
+  --up: #3fb950;
+  --down: #f85149;
+  --warn: #d29922;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+  font-size: 14px;
+}
+a { color: var(--accent); text-decoration: none; }
+
+.topbar { background: var(--panel); border-bottom: 1px solid var(--border); }
+.topbar-inner {
+  max-width: 1400px; margin: 0 auto; padding: 10px 20px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.brand { font-size: 15px; }
+nav { display: flex; gap: 4px; }
+.nav-link {
+  color: var(--text-dim); padding: 6px 12px; border-radius: 6px; font-size: 13px;
+}
+.nav-link:hover { color: var(--text); background: var(--panel-2); }
+.nav-link.active { color: var(--text); background: var(--panel-2); font-weight: 600; }
+
+.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+.foot { text-align: center; color: var(--text-dim); font-size: 12px; padding: 30px 0; }
+
+.panel {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 16px; margin-bottom: 16px;
+}
+.panel h2, .panel h3 { margin: 0 0 12px; font-size: 15px; }
+
+.page-grid { display: grid; grid-template-columns: 340px 1fr; gap: 16px; align-items: start; }
+@media (max-width: 900px) { .page-grid { grid-template-columns: 1fr; } }
+
+.field { display: block; margin-bottom: 10px; }
+.field > span { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+input, select {
+  width: 100%; padding: 7px 9px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+}
+input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.hint { font-size: 12px; color: var(--text-dim); margin: 6px 0; line-height: 1.6; }
+.hint label { margin-right: 8px; }
+
+button.primary {
+  width: 100%; padding: 10px; border-radius: 8px; border: none; cursor: pointer;
+  background: #238636; color: #fff; font-weight: 600; font-size: 14px; margin-top: 10px;
+}
+button.primary:hover { background: #2ea043; }
+button.primary:disabled { background: var(--border); cursor: not-allowed; }
+
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.stat-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px;
+}
+.stat-card .label { font-size: 12px; color: var(--text-dim); }
+.stat-card .value { font-size: 20px; font-weight: 700; margin-top: 2px; }
+.stat-card .sub { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.pos { color: var(--up); } .neg { color: var(--down); } .warn { color: var(--warn); }
+
+.chart-lg { width: 100%; height: 420px; }
+.chart-sm { width: 100%; height: 200px; }
+
+.synth-note {
+  background: rgba(210,153,34,.1); border: 1px solid var(--warn);
+  color: var(--warn); border-radius: 10px; padding: 10px 14px; font-size: 12px;
+  margin-bottom: 12px; line-height: 1.6;
+}
+
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 1100px) { .two-col { grid-template-columns: 1fr; } }
+.chart-md { width: 100%; height: 320px; }
+.rs-pick { margin-right: 10px; font-size: 13px; color: var(--text); cursor: pointer; }
+.event-row { display: flex; gap: 10px; align-items: baseline; padding: 6px 0;
+             border-bottom: 1px solid var(--border); font-size: 13px; }
+.event-date { color: var(--text-dim); min-width: 48px; }
+.event-cat { min-width: 64px; font-size: 12px; }
+.mbar { background: var(--panel-2); border-radius: 4px; height: 14px; overflow: hidden; }
+.mbar-fill { height: 100%; border-radius: 4px; }
+.mbar-fill.up { background: var(--up); }
+.mbar-fill.down { background: var(--down); }
+.center { text-align: center; margin-top: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--border); }
+th { color: var(--text-dim); font-weight: 600; }
+td:first-child, th:first-child { text-align: left; }
+
+.tip { cursor: help; font-size: 11px; color: var(--text-dim); vertical-align: super; }
+
+/* 导航分组标签(美股/加密/系统) */
+.nav-group { font-size: 10px; color: var(--text-dim); opacity: .65; margin: 0 6px 0 10px;
+             user-select: none; vertical-align: 2px; letter-spacing: 1px; }

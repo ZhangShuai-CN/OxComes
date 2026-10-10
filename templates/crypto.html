@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}加密总览 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="stat-row" id="coin-cards"></div>
+<section class="panel">
+  <h2>😨 恐惧贪婪指数 <span class="hint" id="fng-now"></span></h2>
+  <div id="fng-gauge" class="chart-md"></div>
+  <h3>近 3 年走势</h3>
+  <div id="fng-chart" class="chart-md"></div>
+</section>
+<script src="/static/js/crypto.js"></script>
+{% endblock %}

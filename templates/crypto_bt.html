@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}加密回测 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>🎯 恐惧贪婪 × BTC 择时回测</h2>
+  <p class="hint">经典反向情绪策略:F&G 低于买阈值(极度恐惧)满仓 BTC,高于卖阈值(极度贪婪)清仓,
+    中间保持。信号 t 日收盘 → t+1 成交(与美股回测同引擎同防前视)。
+    数据缺失时本页不显示任何结果(无假数据兜底)。</p>
+  <div class="row2">
+    <label class="field"><span>买阈值(F&G <)</span><input id="fng-buy" type="number" value="25" min="0" max="100" step="5"></label>
+    <label class="field"><span>卖阈值(F&G >)</span><input id="fng-sell" type="number" value="75" min="0" max="100" step="5"></label>
+  </div>
+  <div class="row2">
+    <label class="field"><span>换手成本(bps)</span><input id="fng-fee" type="number" value="10" min="0" max="100" step="5"></label>
+    <label class="field"><span></span><button class="primary" id="fng-run">▶ 运行</button></label>
+  </div>
+  <p class="hint" id="fng-bt-status"></p>
+  <div id="fng-bt-cards" class="stat-row"></div>
+  <div id="fng-bt-chart" class="chart-md"></div>
+  <p class="hint" id="fng-bt-note"></p>
+</section>
+<script src="/static/js/crypto_bt.js"></script>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}板块轮动 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-grid">
+  <section class="results" style="grid-column: 1 / -1;">
+    <div class="panel">
+      <h2>🔀 板块轮动 <span id="as-of" class="hint"></span></h2>
+      <div id="sectors-bar" class="chart-md"></div>
+    </div>
+    <div class="two-col">
+      <div class="panel">
+        <h3>动量热力（% 变化）</h3>
+        <div id="momentum-table" class="table-wrap"></div>
+      </div>
+      <div class="panel">
+        <h3>轮动象限 <span class="hint">x=1月动量 · y=12月-1月动量差（右上=强势转弱，左上=转强领跑）</span></h3>
+        <div id="quadrant-chart" class="chart-md"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>相对强度 RS vs SPY <span class="hint">任选板块对比（多选）</span></h3>
+      <div id="rs-picks" class="hint"></div>
+      <div id="rs-chart" class="chart-md"></div>
+    </div>
+    <p id="sectors-note" class="hint"></p>
+  </section>
+</div>
+<script src="/static/js/sectors.js"></script>
+{% endblock %}

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}估值 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="panel" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+  <label class="field" style="flex:1;min-width:260px;"><span>股票代码（如 AAPL / NOK / AAOI）</span>
+    <input id="symbol-input" type="text" placeholder="AAPL" spellcheck="false"></label>
+  <label class="field" style="width:150px;"><span>FCF 增速覆盖(%)</span>
+    <input id="growth-input" type="number" placeholder="自动（营收×0.8）" step="1"></label>
+  <label class="field" style="width:120px;"><span>同行对比</span>
+    <select id="peers-toggle"><option value="1" selected>启用</option><option value="0">关闭</option></select></label>
+  <button id="val-btn" class="primary" style="width:130px;">🔍 估值</button>
+</div>
+<div id="val-result">
+  <p class="hint">输入代码点估值 —— 数据源 FMP 免费档（需 .env 配置 FMP_API_KEY）。</p>
+</div>
+<script src="/static/js/valuation.js"></script>
+{% endblock %}

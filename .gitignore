@@ -1,0 +1,17 @@
+# 密钥与本地配置
+.env
+
+# 数据目录（行情 Parquet / SQLite / 缓存）
+data/
+storage/
+cache/
+logs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# 系统
+.DS_Store

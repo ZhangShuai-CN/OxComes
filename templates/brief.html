@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}每日消息 · {{ app_name }}{% endblock %}
+{% block content %}
+<p id="brief-toolbar" style="display:none">
+  <button class="primary" style="width:auto;padding:6px 12px;" onclick="backfillEvents()">
+    回填最近 1 个月历史消息</button>
+  <span class="hint" id="brief-backfill-status"></span>
+</p>
+<div class="two-col">
+  <section class="panel">
+    <h2>📊 财报 <span class="hint" id="cnt-earnings"></span></h2>
+    <div id="ev-earnings" class="ev-list"><p class="hint">加载中…</p></div>
+  </section>
+  <section class="panel">
+    <h2>🚀 IPO <span class="hint" id="cnt-ipo"></span></h2>
+    <div id="ev-ipo" class="ev-list"><p class="hint">加载中…</p></div>
+  </section>
+</div>
+<div class="two-col">
+  <section class="panel">
+    <h2>☁️ 科技大会</h2>
+    <div id="ev-conference" class="ev-list"><p class="hint">加载中…</p></div>
+  </section>
+  <section class="panel">
+    <h2>🏛️ 投资者日</h2>
+    <div id="ev-investor_day" class="ev-list"><p class="hint">加载中…</p></div>
+  </section>
+</div>
+<div class="panel">
+  <h2>ℹ️ 说明</h2>
+  <p class="hint">
+    窗口:最近 30 天历史 + 未来 7 天。数据源:Nasdaq 财报/IPO 日历(财报按关注清单+
+    市值 ≥$1000 亿分层过滤)。「科技大会」与「投资者日」暂无免费事件源——接入前
+    分类块只显示来源说明,不造数据。无数据时对应面板隐藏。
+  </p>
+</div>
+<script src="/static/js/brief.js"></script>
+{% endblock %}

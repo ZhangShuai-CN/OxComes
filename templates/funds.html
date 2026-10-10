@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}机构持仓 · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="panel">
+  <p><button class="primary" style="width:auto;padding:6px 12px;" onclick="syncFunds()">同步 3 位投资人 13F</button>
+     <span class="hint" id="funds-status"></span></p>
+  <p class="hint">数据源:SEC EDGAR 直连(submissions + infotable XML,无第三方依赖)。
+     双周周日 09:11 自动核查。数据缺失的人物块会显示「待首次同步」而非空表。
+     历史上限:13F30 字符缩写发行人名自动中译,未收录的显示英文原名。</p>
+</section>
+<div id="persons"></div>
+<section class="panel">
+  <h2>⏳ 待接入tracking(数据类型不同,非 13F 主体)</h2>
+  <p class="hint">
+    <strong>佩洛西(Paul Pelosi 家庭)</strong> — 国会议员家庭交易走国会
+    Periodic Transaction Report(PTR)披露(clerk.house.gov),与 SEC 13F 数据结构
+    完全不同,需单独解析器,待后续接入。在接入前本页不显示其任何持仓(不造假数据)。
+  </p>
+  <p class="hint">
+    <strong>Trump</strong> — 政治人物个人资产走政府 OGE 278e 年度财务披露
+    (含 DJT 特朗普媒体科技集团持股),同样非 13F 主体,待后续接入。
+  </p>
+</section>
+<script src="/static/js/funds.js"></script>
+{% endblock %}

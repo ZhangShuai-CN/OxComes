@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}国债 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="panel" id="rates-panel">
+  <h2>🏛️ 美债收益率 <span class="hint" id="rates-meta"></span></h2>
+  <div class="stat-row" id="rates-cards"></div>
+</div>
+<section class="panel">
+  <h2>📉 10Y 美债收益率走势</h2>
+  <div id="yields-chart" class="chart-lg"></div>
+</section>
+<div class="panel">
+  <h2>ℹ️ 说明</h2>
+  <p class="hint">
+    数据源:美国财政部官方收益率曲线(home.treasury.gov,大陆可达)——首次由 FRED/Yahoo
+    提供时同样显示徽标;无假数据兜底,真源全部不可达时本页面不显示任何数值。
+    FedWatch(联邦基金期货隐含利率)因无真实源已下线,接入 ZQ=F 后恢复。
+  </p>
+</div>
+<script src="/static/js/rates.js"></script>
+{% endblock %}

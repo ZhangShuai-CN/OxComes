@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}{{ app_name or 'OxComes' }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/main.css">
+  <script src="/static/vendor/echarts.min.js"></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand"><strong>{{ app_name or 'OxComes' }}</strong></div>
+      <nav>
+        <a href="/" class="nav-link {% if active == 'brief' %}active{% endif %}"
+           title="事件流 · 今日板块">每日消息</a>
+        <span class="nav-group">美股</span>
+        <a href="/market" class="nav-link {% if active == 'market' %}active{% endif %}"
+           title="热力图 · 市场宽度 · VIX">美股总览</a>
+        <a href="/sectors" class="nav-link {% if active == 'sectors' %}active{% endif %}"
+           title="板块轮动">板块轮动</a>
+        <a href="/backtest" class="nav-link {% if active == 'backtest' %}active{% endif %}"
+           title="美股回测（F&G×BTC 见加密回测）">回测</a>
+        <a href="/valuation" class="nav-link {% if active == 'valuation' %}active{% endif %}"
+           title="估值">估值</a>
+        <a href="/funds" class="nav-link {% if active == 'funds' %}active{% endif %}"
+           title="13F 按人物 · 巴菲特/段永平/德鲁肯米勒">机构持仓</a>
+        <span class="nav-group">宏观</span>
+        <a href="/rates" class="nav-link {% if active == 'rates' %}active{% endif %}"
+           title="美债收益率 10Y/30Y/13W">国债</a>
+        <span class="nav-group">加密</span>
+        <a href="/crypto" class="nav-link {% if active == 'crypto' %}active{% endif %}"
+           title="币价 · 恐惧贪婪">加密总览</a>
+        <a href="/crypto/backtest" class="nav-link {% if active == 'crypto-bt' %}active{% endif %}"
+           title="F&G×BTC 择时回测">加密回测</a>
+        <span class="nav-group">系统</span>
+        <a href="/admin" class="nav-link {% if active == 'admin' %}active{% endif %}"
+           title="数据源与任务">管理</a>
+      </nav>
+    </div>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="foot">本地运行 · 免费数据源 · 仅供个人研究，不构成投资建议</footer>
+</body>
+</html>

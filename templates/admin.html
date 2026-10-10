@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}管理与数据 · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="two-col">
+  <section class="panel">
+    <h2>🩺 数据新鲜度</h2>
+    <div id="freshness" class="table-wrap"><p class="hint">加载中…</p></div>
+  </section>
+  <section class="panel">
+    <h2>⚙️ 状态与任务</h2>
+    <div id="jobs"><p class="hint">加载中…</p></div>
+    <hr style="border-color:var(--border);border-style:dashed;">
+    <h3>FMP 配额（今日）</h3>
+    <div id="quota"><div class="mbar"><div class="mbar-fill up" id="quota-bar" style="width:0%"></div></div><p class="hint" id="quota-txt"></p></div>
+    <h3>TQQQ 合成对账</h3>
+    <div id="verify" class="hint">—</div>
+    <h3>手动触发</h3>
+    <p>
+      <button class="primary" style="width:auto;padding:6px 12px;" onclick="sync('quotes')">同步行情</button>
+      <button class="primary" style="width:auto;padding:6px 12px;" onclick="sync('events')">扫事件</button>
+      <button class="primary" style="width:auto;padding:6px 12px;" onclick="sync('tqqq_verify')">TQQQ 对账</button>
+      <button class="primary" style="width:auto;padding:6px 12px;" onclick="sync('all')">全部</button>
+    </p>
+    <p class="hint" id="sync-status"></p>
+  </section>
+</div>
+<div class="panel">
+  <h2>🔌 数据源管理</h2>
+  <p class="hint">按数据域显示当前优先链与实际来源;点源名调整顺序(靠前者先尝试),保存后下次同步生效。
+    「同步行情」将按新链拉取。</p>
+  <div id="sources" class="table-wrap"><p class="hint">加载中…</p></div>
+  <p><button class="primary" style="width:auto;padding:6px 12px;" onclick="saveChains()">保存优先链</button>
+     <span class="hint" id="sources-status"></span></p>
+</div>
+<div class="panel">
+  <h2>🗂 同步日志</h2>
+  <div id="sync-log" class="table-wrap"></div>
+</div>
+<script src="/static/js/admin.js"></script>
+{% endblock %}
