@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}{{ app_name or 'OxComes' }}{% endblock %}</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=1">
   <link rel="stylesheet" href="/static/css/main.css">
   <script src="/static/vendor/echarts.min.js"></script>
   {% block head %}{% endblock %}
@@ -11,7 +12,10 @@
 <body>
   <header class="topbar">
     <div class="topbar-inner">
-      <div class="brand"><strong>{{ app_name or 'OxComes' }}</strong></div>
+      <a class="brand" href="/" title="回每日消息">
+        <img class="brand-logo" src="/static/logo.png" alt="">
+        <strong>{{ app_name or 'OxComes' }}</strong>
+      </a>
       <nav>
         <a href="/" class="nav-link {% if active == 'brief' %}active{% endif %}"
            title="事件流 · 策略提醒 · 今日板块">每日消息</a>

@@ -24,7 +24,13 @@ a { color: var(--accent); text-decoration: none; }
   max-width: 1400px; margin: 0 auto; padding: 10px 20px;
   display: flex; align-items: center; justify-content: space-between;
 }
-.brand { font-size: 15px; }
+.brand {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 15px; color: var(--text); text-decoration: none;
+  padding: 4px 10px 4px 6px; border-radius: 6px;
+}
+.brand:hover { background: var(--panel-2); }
+.brand-logo { width: 20px; height: 20px; border-radius: 4px; }
 nav { display: flex; gap: 4px; }
 .nav-link {
   color: var(--text-dim); padding: 6px 12px; border-radius: 6px; font-size: 13px;

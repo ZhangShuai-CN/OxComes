@@ -94,7 +94,8 @@ async def run(req: BacktestRequest):
 
 @router.get("/ma_signal")
 async def ma_signal():
-    """当日策略提醒:ma200_panic 两个形态(过热增强 on/off)的最新信号快照。
+    """当日策略提醒:ma200_panic 过热增强形态(overheat=on)的最新信号快照
+    (2026-10-11 起只保留增强形态,plain 形态展示弃用;K 线图同步打买卖信号点)。
 
     语义 = 每日收盘后的执行指令(引擎 next_open 口径):t 收盘信号 → t+1 开盘
     成交。空仓跟随者按「在场」信号于次一交易日开盘买入。
@@ -124,72 +125,79 @@ async def ma_signal():
     px_prev = float(px_series.iloc[-2])
     oh_sell, oh_rebuy = m2 * 1.5, m2 * 1.2
 
+    # 过热增强形态信号(overheat=on):w>0 即「在场」。翻转日 t 收盘确认信号 → t+1 开盘成交
     stg = get_strategy("ma200_panic")()
     prices = px_series.to_frame("TQQQ")
-    base_params = {"signal_ticker": "TQQQ", "holding_ticker": "TQQQ"}
+    out = stg.build(prices, {"signal_ticker": "TQQQ", "holding_ticker": "TQQQ", "overheat": "on"})
+    w = out.weights["TQQQ"].round(6)
+    w_now, w_prev = bool(w.iloc[-1] > 0), bool(w.iloc[-2] > 0)
+    # 仓位翻转序列(日期, 方向);w 序列起点翻转无意义(状态机暖机)
+    chg = (w != w.shift(1)) & w.shift(1).notna()
+    flips = [(d, "buy" if bool(w.loc[d] > 0) else "sell") for d in w.index[chg]]
+    last_flip = (str(flips[-1][0].date()), "在场" if w.iloc[-1] > 0 else "空仓") \
+        if flips else None
 
-    def _dist(action: str, overheat: bool) -> list[dict]:
-        """按「当前价格位置 × 策略状态」计算关键距离(pct 为 到达该线还差的价格变动%)。"""
-        d = []
-
-        def add(label: str, target: float, note: str = ""):
-            d.append({"label": label, "pct": round((target / px - 1) * 100, 1),
-                      "target": round(target, 2), "note": note})
-
-        in_panic = px < m5
-        if action in ("hold", "buy"):          # 在场(或新进场):上行防过热,下行防破位
-            add("涨到过热止盈线(200MA+50%)卖出", oh_sell)
-            if overheat:
-                add("跌到回落买回线(200MA+20%)", oh_rebuy, "仅过热止盈卖出后生效")
-            add("跌到 200MA 破位卖出线", m2)
-        elif action == "wait" and px > oh_sell:  # 过热等待:等回落到买回带
-            add("跌到回落买回线(200MA+20%)买回", oh_rebuy)
-            add("跌回 200MA(等待作废,恢复普通空仓)", m2)
-        elif action == "wait":                  # 空仓观望带:两条进场路
-            add("涨到 200MA 上方买入", m2)
-            add("跌到 500MA 恐慌线买入", m5)
-        elif action == "sell" and px > oh_sell:  # 过热止盈卖出:等回落接回
-            add("跌到回落买回线(200MA+20%)买回", oh_rebuy)
-            add("跌回 200MA(等待作废,恢复普通空仓)", m2)
-        elif action == "sell":                  # 破 200MA 卖出:两条重新进场路
-            add("涨回 200MA 上方买入", m2)
-            if not in_panic:
-                add("跌到 500MA 恐慌线买入", m5)
-        return d
-
-    def _snapshot(overheat: bool):
-        out = stg.build(prices, {**base_params, "overheat": "on" if overheat else "off"})
-        w = out.weights["TQQQ"].round(6)
-        w_now, w_prev = bool(w.iloc[-1] > 0), bool(w.iloc[-2] > 0)
-        # 最近一次仓位翻转(日期与去向);w 序列起点翻转无意义(状态机暖机)
-        chg = (w != w.shift(1)) & w.shift(1).notna()
-        flips = w.index[chg]
-        last_flip = (str(flips[-1].date()), "在场" if w.iloc[-1] > 0 else "空仓") \
-            if len(flips) else None
-        # 动作分类:对「空仓跟随者」与「已在场持有者」分别给出次一开盘指令
-        if w_now and not w_prev:
-            action, text = "buy", "进场信号已确认 → 次一交易日开盘买入(在场者忽略)"
-        elif w_now and w_prev:
-            action, text = "hold", "持有,无需动作"
-        elif w_now is False and w_prev:
-            if px > oh_sell:
-                action, text = "sell", "过热止盈信号(收盘>200MA+50%)→ 次一交易日开盘卖出,等回落买回"
-            else:
-                action, text = "sell", "离场信号(收盘跌破200MA)→ 次一交易日开盘卖出"
-        elif px > oh_sell:
-            action, text = "wait", "过热等待中,等回落到 200MA+20%(线上)买回"
+    # 动作分类:对「空仓跟随者」与「已在场持有者」分别给出次一开盘指令
+    if w_now and not w_prev:
+        action, text = "buy", "进场信号已确认 → 次一交易日开盘买入(在场者忽略)"
+    elif w_now and w_prev:
+        action, text = "hold", "持有,无需动作"
+    elif w_now is False and w_prev:
+        if px > oh_sell:
+            action, text = "sell", "过热止盈信号(收盘>200MA+50%)→ 次一交易日开盘卖出,等回落买回"
         else:
-            action, text = "wait", "空仓观望(价格在 200MA 与 500MA 之间,等站上 200MA 或跌破 500MA 恐慌线)"
-        return {
-            "id": "enhanced" if overheat else "plain",
-            "name": ("200MA趋势 + 500MA恐慌抄底 + (收盘 > 200MA + 50%止盈，回落200MA + 20%买回)"
-                     if overheat else "200MA趋势 + 500MA恐慌抄底"),
-            "action": action, "action_text": text,
-            "distances": _dist(action, overheat),
-            "last_flip": last_flip,
-        }
+            action, text = "sell", "离场信号(收盘跌破200MA)→ 次一交易日开盘卖出"
+    elif px > oh_sell:
+        action, text = "wait", "过热等待中,等回落到 200MA+20%(线上)买回"
+    else:
+        action, text = "wait", "空仓观望(价格在 200MA 与 500MA 之间,等站上 200MA 或跌破 500MA 恐慌线)"
+
+    # 关键距离:按「当前价格位置 × 策略状态」列出到各线还差的价格变动%
+    distances: list[dict] = []
+
+    def add(label: str, target: float, note: str = ""):
+        distances.append({"label": label, "pct": round((target / px - 1) * 100, 1),
+                          "target": round(target, 2), "note": note})
+
+    in_panic = px < m5
+    if action in ("hold", "buy"):          # 在场(或新进场):上行防过热,下行防破位
+        add("涨到过热止盈线(200MA+50%)卖出", oh_sell)
+        add("跌到回落买回线(200MA+20%)", oh_rebuy, "仅过热止盈卖出后生效")
+        add("跌到 200MA 破位卖出线", m2)
+    elif action == "wait" and px > oh_sell:  # 过热等待:等回落到买回带
+        add("跌到回落买回线(200MA+20%)买回", oh_rebuy)
+        add("跌回 200MA(等待作废,恢复普通空仓)", m2)
+    elif action == "wait":                  # 空仓观望带:两条进场路
+        add("涨到 200MA 上方买入", m2)
+        add("跌到 500MA 恐慌线买入", m5)
+    elif action == "sell" and px > oh_sell:  # 过热止盈卖出:等回落接回
+        add("跌到回落买回线(200MA+20%)买回", oh_rebuy)
+        add("跌回 200MA(等待作废,恢复普通空仓)", m2)
+    elif action == "sell":                  # 破 200MA 卖出:两条重新进场路
+        add("涨回 200MA 上方买入", m2)
+        if not in_panic:
+            add("跌到 500MA 恐慌线买入", m5)
+
+    strategy = {
+        "name": "200MA趋势 + 500MA恐慌抄底 + (收盘 > 200MA + 50%止盈，回落200MA + 20%买回)",
+        "action": action, "action_text": text,
+        "distances": distances,
+        "last_flip": last_flip,
+    }
 
     today = pd.Timestamp.today().normalize()
+
+    # K 线窗口(策略提醒蜡烛图):尾部 240 根 ≈ 1 年。均线沿用全史 rolling 序列
+    # 切尾而非窗口内重算,窗口首日的均线值即全史口径,与信号判定一致。
+    # 蜡烛四列取腾讯前复权 OHLC(实测 Close==Adj Close,与 px/MA 同口径)。
+    n = 240
+    win = df.iloc[-n:]
+    tail = lambda s: [round(float(v), 2) if pd.notna(v) else None
+                      for v in s.iloc[-n:]]
+    kline = [[o, h, l, c] for o, h, l, c in
+             zip(win["Open"].round(2), win["High"].round(2),
+                 win["Low"].round(2), win["Close"].round(2))]
+
     return {
         "ok": True,
         "ticker": "TQQQ",
@@ -202,5 +210,14 @@ async def ma_signal():
         "px_ratio": round(px / m2, 2) if m2 else None,
         "overheat_sell_px": round(oh_sell, 2),
         "overheat_rebuy_px": round(oh_rebuy, 2),
-        "strategies": [_snapshot(False), _snapshot(True)],
+        "strategies": [strategy],
+        "chart": {
+            "dates": [str(d.date()) for d in win.index],
+            "kline": kline,
+            "ma200": tail(ma200), "ma500": tail(ma500),
+            "oh_sell": tail(ma200 * 1.5), "oh_rebuy": tail(ma200 * 1.2),
+            # 买卖信号打点(▲买/▼卖):翻转日 = 信号收盘确认日;窗口外丢弃
+            "flips": [{"date": str(d.date()), "type": t}
+                      for d, t in flips if d >= win.index[0]],
+        },
     }

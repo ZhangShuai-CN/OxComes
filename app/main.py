@@ -8,6 +8,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -180,10 +181,13 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 
 @app.middleware("http")
-async def _static_no_cache(request, call_next):
-    """本地分析工具:静态资源禁用启发式缓存(每次改动 JS/CSS 立即生效,ETag 仍省带宽)。"""
+async def _static_cache(request, call_next):
+    """本地分析工具:静态资源禁用启发式缓存(每次改动 JS/CSS 立即生效,ETag 仍省带宽)。
+    例外 favicon:URL 自带 ?v=N 版本号,换图标改版本号即可,长缓存避免每次页面加载都 304 协商。"""
     resp = await call_next(request)
-    if request.url.path.startswith("/static"):
+    if request.url.path == "/static/favicon.ico":
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+    elif request.url.path.startswith("/static"):
         resp.headers["Cache-Control"] = "no-cache"
     return resp
 
@@ -193,6 +197,16 @@ app.include_router(backtest_api.router)
 app.include_router(p2_api.router)
 app.include_router(admin_api.router)
 app.include_router(crypto_api.router)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """浏览器默认请求根路径 /favicon.ico(静态目录挂在 /static 下,需单独路由)。"""
+    return FileResponse(
+        settings.base_dir / "static" / "favicon.ico",
+        media_type="image/x-icon",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.get("/")
