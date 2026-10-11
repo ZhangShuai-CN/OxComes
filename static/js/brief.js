@@ -200,40 +200,35 @@ function renderMaChart(el, d) {
   });
 }
 
-// ---- 当日策略提醒(多标的: TQQQ 跟单 + QQQ 共识版;单标的缺数据=该行披露,全缺=整面板隐藏) ----
+// ---- 当日策略提醒(多标的,每标的一块:标题+自己的K线图+自己的信号卡;单标的缺数据=该行披露) ----
 async function loadMaSignal() {
   const panel = $("#ma-reminder-panel");
-  const chartsWrap = $("#ma-charts");
+  const wrap = $("#ma-reminder");
   try {
     const d = await fetch("/api/backtest/ma_signal").then(r => r.json());
     if (!d || !d.ok) {
-      chartsWrap.innerHTML = "";
-      $("#ma-reminder").innerHTML = "";
+      wrap.innerHTML = "";
       panel.querySelector(".hint").textContent = "❌ " + (d && d.error || "策略提醒数据不可用");
       return;
     }
-    chartsWrap.innerHTML = "";
     const cls = { buy: "pos", sell: "neg", hold: "", wait: "warn" };
-    let cardsHtml = "";
+    wrap.innerHTML = "";
     (d.signals || []).forEach(sig => {
       if (!sig.ok) {   // 单标的缺数据:一行警告,不影响其他标的
-        cardsHtml += `<p class="hint warn">⚠ ${sig.ticker}: ${escBrief(sig.error)}</p>`;
+        wrap.insertAdjacentHTML("beforeend",
+          `<p class="hint warn">⚠ ${sig.ticker}: ${escBrief(sig.error)}</p>`);
         return;
       }
-      // K 线图 + 卡片:每个标的一块(图在上、信号卡在下),标题带标的与形态名
       const label = sig.chart.line_labels || {};
-      const chartEl = document.createElement("div");
-      chartEl.style.height = "360px";
-      chartEl.style.margin = "10px 0 4px";
-      chartsWrap.appendChild(chartEl);
-      renderMaChart(chartEl, sig);
       const chg = sig.px_chg_pct;
       const chgTxt = (chg == null) ? "" :
         ` · 昨日 <span class="${chg >= 0 ? "pos" : "neg"}">${chg >= 0 ? "+" : ""}${chg}%</span> 收 $${fmtNum(sig.px)}`
         + (sig.stale_days > 4 ? ` · <span class="warn">⚠ 已 ${sig.stale_days} 天未更新</span>` : "");
       const hist = (sig.strategies || []).map(s => s.last_flip ? `最近翻转: ${s.last_flip[0]} → ${s.last_flip[1]}` : "").filter(Boolean)[0] || "";
-      cardsHtml += `
-      <div class="ma-block">
+      // 块结构:标题 → 该标的的 K 线图 → 该标的的信号卡(同标的的图与卡上下紧邻)
+      const block = document.createElement("div");
+      block.className = "ma-block";
+      block.innerHTML = `
         <h3 class="ma-title">${sig.ticker} · ${escBrief(sig.label || "")} <span class="hint">数据截至 ${sig.as_of}${chgTxt}</span></h3>
         <div class="ma-cards">
         ${(sig.strategies || []).map(s => `
@@ -247,15 +242,18 @@ async function loadMaSignal() {
                 <b class="${x.pct >= 0 ? "pos" : "neg"}">${x.pct >= 0 ? "+" : ""}${x.pct}%</b> → $${fmtNum(x.target)}
                 ${x.note ? `<span class="hint">(${escBrief(x.note)})</span>` : ""}</div>`).join("")}
           </div>`).join("")}
-        </div>
-      </div>`;
+        </div>`;
+      const chartEl = document.createElement("div");
+      chartEl.style.height = "360px";
+      chartEl.style.margin = "8px 0 2px";
+      block.insertBefore(chartEl, block.querySelector(".ma-cards"));   // 图插在标题与卡之间
+      wrap.appendChild(block);
+      renderMaChart(chartEl, sig);
     });
-    $("#ma-reminder").innerHTML = cardsHtml;
     $("#ma-asof").textContent = "";   // 各块自带数据日期,头部不再重复
   } catch (e) {
     console.error("策略提醒加载失败:", e);
-    chartsWrap.innerHTML = "";
-    $("#ma-reminder").innerHTML =
+    wrap.innerHTML =
       "<p class='hint warn'>❌ 策略提醒加载失败(本地数据/服务不可用),不显示替代数据。</p>";
   }
 }

@@ -35,6 +35,13 @@ async def macro_yields(history: int = Query(252, ge=30, le=5000)):
     return macro_mod.get_yields(history)
 
 
+@router.get("/api/macro/panels")
+async def macro_panels(days: int = Query(1000, ge=60, le=10000)):
+    """宏观页走势图序列:美元指数/WTI/裂解价差/汇率(含倒数方向)/黄金/BTC。
+    某品种本地无数据 = 该面板前端隐藏(无假数据铁律)。"""
+    return macro_mod.get_macro_panels(days)
+
+
 @router.get("/api/macro/breadth")
 async def macro_breadth(days: int = Query(252, ge=30, le=5000)):
     return breadth_mod.get_breadth(days)

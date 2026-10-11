@@ -92,11 +92,15 @@ async def run(req: BacktestRequest):
     return result.to_api_payload()
 
 
-# 当日策略提醒的标的与策略配置(2026-10-11 双标的):
+# 当日策略提醒的标的与策略配置(2026-10-11 双标的 → 同日加 SPY 三标的):
 # - TQQQ 跟单形态:经典 200/500 + 独立锚200@1.5/1.2 过热(页面沿用已久的跟单口径)
 # - QQQ 共识版:牛熊线200 出场 + 恐慌线400 抄底 + 对牛熊线乖离20%止盈/10%回调
 #   (2026-10-11 用户终拍:对称乖离档;历史档位参考——×1.3 近零触发=闲置,
 #   ×1.18 扫描最优(全窗 15.37%)、×1.1 全窗 13.16%/2010后 18.90%)
+# - SPY 共识版(2026-10-11 网格研究):牛熊线200 + 恐慌线850 + 乖离15/10。
+#   SPY 拉伸结构比 QQQ 窄一档(历史最大乖离 ×1.205,×1.2 以上仅 5 天),过热
+#   线按 15% 定档才有触发深度;恐慌线 850=3.4 年深熊抄底线,增益全在慢熊
+#   防守(2008 -26.2% vs 死拿 -39.4%、2022 -7.2% vs -20.0%)。
 SIGNAL_CONFIGS = [
     {
         "ticker": "TQQQ", "label": "跟单 · 3x 经典",
@@ -107,6 +111,11 @@ SIGNAL_CONFIGS = [
         "ticker": "QQQ", "label": "共识版 · 牛熊线200/恐慌线400/乖离20/10",
         "params": {"ma_trend": 200, "ma_panic": 400, "oh_anchor": 200,
                    "oh_sell_mult": 1.2, "oh_rebuy_mult": 1.1, "overheat": "on"},
+    },
+    {
+        "ticker": "SPY", "label": "共识版 · 牛熊线200/恐慌线850/乖离15/10",
+        "params": {"ma_trend": 200, "ma_panic": 850, "oh_anchor": 200,
+                   "oh_sell_mult": 1.15, "oh_rebuy_mult": 1.10, "overheat": "on"},
     },
 ]
 
@@ -253,7 +262,7 @@ async def ma_signal():
 
     语义 = 每日收盘后的执行指令(引擎 next_open 口径):t 收盘信号 → t+1 开盘
     成交。空仓跟随者按「在场」信号于次一交易日开盘买入。标的清单见
-    SIGNAL_CONFIGS(TQQQ 跟单形态 + QQQ 共识版),单标的缺数据只隐藏该卡并
+    SIGNAL_CONFIGS(TQQQ 跟单形态 + QQQ/SPY 共识版),单标的缺数据只隐藏该卡并
     披露原因,不影响其他标的。
     """
     signals = [_signal_snapshot(c) for c in SIGNAL_CONFIGS]

@@ -115,8 +115,8 @@ h4.sub-title { margin: 2px 0 10px; font-size: 13px; font-weight: 600; color: var
 .event-date { color: var(--text-dim); min-width: 48px; }
 .event-cat { min-width: 64px; font-size: 12px; }
 /* 当日策略提醒卡(brief 页) */
-/* 当日策略提醒(多标的块:每标的一张 K 线图 + 信号卡组) */
-.ma-block { border-top: 1px solid var(--border); padding-top: 6px; }
+/* 当日策略提醒(每标的独立块:标题 + 该标的K线图 + 信号卡) */
+.ma-block { border-top: 1px solid var(--border); padding: 6px 0 10px; }
 .ma-block:first-child { border-top: none; }
 .ma-title { font-size: 14px; font-weight: 600; margin: 8px 0 2px; color: var(--text); }
 .ma-card { padding: 10px 0; border-bottom: 1px solid var(--border); }
