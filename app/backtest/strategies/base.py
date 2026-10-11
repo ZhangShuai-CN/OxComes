@@ -23,6 +23,8 @@ class ParamSpec:
     max: Optional[float] = None
     step: Optional[float] = None
     options: Optional[list] = None  # select 的选项 [{value,label}]
+    hidden_values: Optional[list] = None  # select 的内部合法值(校验放行,UI 不渲染——
+                                          # 如 ma200_panic 的 overheat="band" 由 runner 配跑)
     formatting: Optional[str] = None  # 前端格式化提示
     grid: Optional[list] = None      # 网格扫描取值（CLI/API 用）
 

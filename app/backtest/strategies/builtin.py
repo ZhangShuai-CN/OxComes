@@ -92,23 +92,35 @@ class MA200PanicStrategy(Strategy):
       在趋势线上方 → 买回；回调线～过热线带内继续等待；跌破趋势线 → 等待
       作废，恢复普通空仓语义（恐慌线/站上规则接管）。
 
+    **过热买回后再出场（2026-10-11 用户定稿「一个开关跑双形态」）**：
+    UI 只有 开/关；开启(off/on)时 runner 同窗配跑 `band` 变体一并展示——
+    - `on`（主形态）：买回后回普通持有——再卖出 = 再过热或再破趋势线；
+    - `band`（快进快出变体,hidden_value 由 runner 配跑）：买回后以回调线为
+      卖出线——跌破回调线卖（wait_up）、涨回买（band_hold），围绕该线反复
+      交易；跌破趋势线 → 模式作废回普通空仓语义（恐慌线通道保留，否则深熊
+      恐慌抄底死亡）。买回当日不评卖出（买回价允许在线下，当日评会自锁）。
+      分 regime 实证：band 震荡牛 64.1% vs on 52.9%（利器），单边牛 93.1%
+      vs 103.6%（漏勺）——震荡市工具。
+
     「跌破趋势线」用交叉事件（从上方跌到下方）而非状态：恐慌买入时价格已在
     趋势线下方，状态语义会买入次日即卖形成死循环；事件语义下恐慌仓的出场
     = 拥有后的再跌破。
 
     **过热锚均线独立于趋势线**（2026-10-11 研究：锚是最敏感的设计维度——
     锚=长趋势线时中低倍数=普通牛市常态地带，策略变异成半永续等待；短锚
-    ×1.15 才精确框住陡峭主升段）。默认锚=200=趋势线默认、倍数 1.5/1.2，
-    即经典 TQQQ 过热语义，数值行为与旧版逐位兼容。QQQ 研究最优预设：
-    MA300/400 底仓 + 锚150 @1.15/1.02（2010后 21.07%）。
+    ×1.15 才精确框住陡峭主升段）。默认锚=200=趋势线默认、倍数 1.5/1.1
+    （2026-10-11 分 regime 网格定稿:回调线 1.2→1.1 为单边牛 +9.7pp/震荡牛
+    +4.5pp/全窗 +3.2pp 的稳健山脊改进——rb=1.1 列对所有过热档位系统性高于
+    1.2 列,前后半窗与 MDD 均不变;与 QQQ 共识版 rebuy=1.1 统一）。
+    QQQ 研究最优预设：MA300/400 底仓 + 锚150 @1.15/1.02（2010后 21.07%）。
     """
     id = "ma200_panic"
     name = "MA趋势 + MA恐慌抄底（可选过热止盈）"
     description = (
         "趋势线：持仓中收盘跌破→次日开盘卖出(唯一常规卖出)；空仓站上→买入。"
         "恐慌线：空仓中收盘低于→次日开盘恐慌抄底买入；恐慌仓出场=站上趋势线后再跌破趋势线。"
-        "可选过热增强：过热线(锚均线×倍数)止盈卖出，回落到过热回调线(锚均线×倍数)买回——"
-        "锚均线独立于趋势线，倍数可分别设置。"
+        "过热增强三态——关闭 / 买回后按趋势线持有(默认) / 买回后按过热回调线快进快出"
+        "(跌破回调线卖·涨回买,跌破趋势线回常规)。锚均线独立于趋势线,倍数可分别设置。"
     )
 
     params = [
@@ -122,12 +134,13 @@ class MA200PanicStrategy(Strategy):
                   grid=[100, 150, 200]),
         ParamSpec("oh_sell_mult", "过热线倍数(×锚均线)", type="number", default=1.5, min=1.0, max=3.0,
                   step=0.01),
-        ParamSpec("oh_rebuy_mult", "过热回调线倍数(×锚均线)", type="number", default=1.2, min=0.05,
+        ParamSpec("oh_rebuy_mult", "过热回调线倍数(×锚均线)", type="number", default=1.1, min=0.05,
                   max=3.0, step=0.01),
         ParamSpec("weight", "持仓权重(1=全仓)", type="number", default=1.0, min=0.05, max=1.0, step=0.05),
         ParamSpec("overheat", "过热增强", type="select", default="off",
                   options=[{"value": "off", "label": "关闭"},
-                           {"value": "on", "label": "开启（过热线止盈 + 过热回调线买回）"}]),
+                           {"value": "on", "label": "开启（结果同时展示两种买回后处置形态）"}],
+                  hidden_values=["band"]),   # band=快进快出变体:由 runner 在 on 时自动配跑,UI 不单选
     ]
 
     def warmup_days(self, params: dict) -> int:
@@ -142,9 +155,11 @@ class MA200PanicStrategy(Strategy):
         panic_n = int(params.get("ma_panic") or 500)
         anchor_n = int(params.get("oh_anchor") or trend_n)   # 过热线/回调线的锚(默认=趋势线)
         sell_m = float(params.get("oh_sell_mult") or 1.5)
-        rebuy_m = float(params.get("oh_rebuy_mult") or 1.2)
+        rebuy_m = float(params.get("oh_rebuy_mult") or 1.1)
         weight = float(params.get("weight") or 1.0)
-        overheat = str(params.get("overheat") or "off") == "on"
+        overheat = str(params.get("overheat") or "off")     # off | on(趋势线) | band(快进快出)
+        oh_on = overheat in ("on", "band")
+        band_mode = overheat == "band"
 
         out = StrategyOutput(weights=pd.DataFrame(0.0, index=prices.index, columns=prices.columns))
         _asset_columns(prices, signal, holding)
@@ -161,35 +176,53 @@ class MA200PanicStrategy(Strategy):
         # 卖出「跌破」= 交叉事件：昨日线上 → 今日线下
         cross_dn = above_t.shift(1, fill_value=False) & ~above_t
         # 过热增强：过热线/过热回调线（锚均线×倍数，滞回带防鞭打）
-        oh_sell = (sig_px > ma_o * sell_m).fillna(False) if overheat else None
-        oh_rebuy = (sig_px <= ma_o * rebuy_m).fillna(False) if overheat else None
+        oh_sell = (sig_px > ma_o * sell_m).fillna(False) if oh_on else None
+        oh_rebuy = (sig_px <= ma_o * rebuy_m).fillna(False) if oh_on else None
+        rebuy_ln = ma_o * rebuy_m                          # 过热回调线(band 形态的交易线)
 
         w = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
-        state = "flat"    # flat 空仓 | hold 持仓 | wait 过热等待（等回落买回）
+        # on 形态: flat 空仓 | hold 持仓 | wait 过热等待（等回落买回,买回后回普通规则）
+        # band 形态: 上述 + wait 拆为 wait止盈后等回落 / wait_up 跌破后等涨回 + band_hold
+        #            (买回后以回调线为卖出线,围绕其快进快出;跌破趋势线则回普通语义)
+        state = "flat"
         for date in prices.index:
             start_state = state
+            px, mt = sig_px.loc[date], ma_t.loc[date]
             if state == "hold":
                 if bool(cross_dn.loc[date]):
                     # 单日暴跌同时穿两线（跌破200又直接进恐慌区）：卖出优先纪律，
                     # 卖出当日不再评估进场（哪怕同日已在恐慌区），次日收盘仍在
                     # 恐慌区(<500MA)则按恐慌规则买回
                     state = "flat"
-                elif overheat and bool(oh_sell.loc[date]):
+                elif oh_on and bool(oh_sell.loc[date]):
                     state = "wait"             # 过热止盈 → 等回落
+            elif state == "band_hold":          # 仅 band 形态：买回后围绕回调线交易
+                if start_state == "band_hold":  # 买回当日不评卖出（防自锁：买回价可 < 线）
+                    if oh_on and bool(oh_sell.loc[date]):
+                        state = "wait"          # 持有中再过热 → 再次止盈
+                    elif bool(px < rebuy_ln.loc[date]):
+                        state = "wait_up"       # 跌破回调线 → 卖出
             elif state == "wait":
-                if bool(sig_px.loc[date] <= ma_t.loc[date]):
+                if bool(px <= mt):
                     state = "flat"             # 跌回均线 → 恢复普通空仓语义（同样次日起评估）
-                elif overheat and bool(oh_rebuy.loc[date] and above_t.loc[date]):
-                    state = "hold"             # 回落到 (200MA, 200MA×1.2] 带内 → 买回
-                # 1.2×~1.5× 带内继续等待（滞回带防鞭打）
+                elif oh_on and band_mode and bool(px <= rebuy_ln.loc[date]):
+                    state = "band_hold"        # band：回落到回调线 → 买回(此后以该线为卖出线)
+                elif oh_on and not band_mode and bool(oh_rebuy.loc[date] and above_t.loc[date]):
+                    state = "hold"             # on：回落到 (趋势线, 回调线] 带内 → 买回普通持有
+                # 回调线~过热线带内继续等待（滞回带防鞭打）
+            elif state == "wait_up":            # 仅 band 形态：跌破回调线后等涨回
+                if bool(px <= mt):
+                    state = "flat"             # 跌破趋势线：带状模式作废,普通空仓语义接管
+                elif band_mode and bool(px >= rebuy_ln.loc[date]):
+                    state = "band_hold"        # 涨回回调线 → 买回
             # 进场评估只对「当日开场即空仓」的 flat 生效：当日刚卖出/刚转出的
             # 不再进场（与原 elif 链的「卖出优先」纪律一致）
             if start_state == "flat":
-                if overheat and bool(oh_sell.loc[date]):
+                if oh_on and bool(oh_sell.loc[date]):
                     state = "wait"             # 空仓遇过热：不进场，直接进入回落等待
                 elif bool(enter.loc[date]):
                     state = "hold"
-            if state == "hold":
+            if state in ("hold", "band_hold"):
                 w.loc[date, holding] = weight
         out.weights = w
         if any(c.startswith("SYNTH_") for c in prices.columns):

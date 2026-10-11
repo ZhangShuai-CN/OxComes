@@ -47,6 +47,23 @@ async def macro_breadth(days: int = Query(252, ge=30, le=5000)):
     return breadth_mod.get_breadth(days)
 
 
+@router.get("/api/market/indicators")
+async def market_indicators():
+    """波动率位置(SPY/QQQ 实现波动率 10 年分位)+ 牛形体制(震荡牛/单边牛/熊)
+    的滚动指标(R²/10%校正/趋势效率比)+ 历史同位年份。方法论对标美银
+    Bull&Bear / 高盛 FCI 的分量级 percentile-of-history 口径(公开可复现子集)。"""
+    from app.market import regime as regime_mod
+    return regime_mod.indicators()
+
+
+@router.get("/api/market/valuation")
+async def market_valuation():
+    """估值位置:S&P500 PE(TTM)/EPS(TTM) 当前值+10 年分位(multpl.com 月度全史,
+    1871 起);QQQ 指数级免费源暂缺,返回披露说明(无假数据铁律)。"""
+    from app.market import valuation_metrics
+    return valuation_metrics.valuation_snapshot()
+
+
 @router.get("/api/macro/vix")
 async def macro_vix():
     return macro_mod.get_vix()
@@ -113,15 +130,14 @@ async def valuation(symbol: str, fcf_growth: float | None = None,
 
 
 # ── 美股总览:美股热力图(treemap,参考 tepeiya/stock-heatmap 与 coinglass) ──
+# 2026-10-12 用户令去除宽基块(只留 11 板块);宽基涨跌看每日消息/回测页。
 
-_HEAT_BROAD = [("SPY", "标普500", 2.6), ("QQQ", "纳指100", 2.2), ("RSP", "等权标普", 1.4),
-               ("TQQQ", "纳指3x", 1.0), ("SQQQ", "纳指反向3x", 0.8)]
 _HEAT_PERIODS = [("1d", 1), ("1w", 5), ("1m", 21), ("3m", 63), ("1y", 252)]
 
 
 @router.get("/api/market/heatmap")
 async def market_heatmap():
-    """美股 treemap:11 板块 ETF + 宽基。块大小=固定示意权重(Phase 2 可接入
+    """美股 treemap:11 板块 ETF。块大小=示意权重(Phase 2 可接入
     ETF 规模),色=选定周期涨跌幅。本地 parquet 即时计算,无外部请求。
 
     日期对齐(2026-10-10 修复"今日显示昨日"事故):全市场基准日 as_of=所有标的
@@ -131,8 +147,7 @@ async def market_heatmap():
     from app.data import store, universe
 
     # 第一轮:取全部标的的收盘序列,确定基准日 as_of
-    specs = [(t, n, "宽基", w) for t, n, w in _HEAT_BROAD] + \
-            [(t, cfg.sector, "板块", 1.0) for t, cfg in universe.SECTOR_ETFS.items()]
+    specs = [(t, cfg.sector, "板块", 1.0) for t, cfg in universe.SECTOR_ETFS.items()]
     series = {}
     for t, _, _, _ in specs:
         df = store.read_ohlcv(t)

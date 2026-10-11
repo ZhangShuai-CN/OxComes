@@ -19,7 +19,7 @@ def validate_params(strategy: type[Strategy], params: dict) -> dict:
             if sp.max is not None and v > sp.max:
                 raise ValueError(f"{strategy.id}.{key}={v} 高于上限 {sp.max}")
         elif sp.type == "select":
-            valid = [o["value"] for o in (sp.options or [])]
+            valid = [o["value"] for o in (sp.options or [])] + list(sp.hidden_values or [])
             if v not in valid:
                 raise ValueError(f"{strategy.id}.{key}={v} 不在选项 {valid} 中")
         clean[key] = v

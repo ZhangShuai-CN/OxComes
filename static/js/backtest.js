@@ -89,7 +89,8 @@ function defaultBenchmarks() {
 // per-ticker 策略预设。QQQ 共识版（2026-10-11 用户拍板）：牛熊线 200 出场 +
 // 恐慌线 400 抄底 + 对牛熊线乖离 20% 止盈/10% 回调买回（对称乖离档；研究版
 // 300/400+锚150@1.15/1.02 曾被用户判定过拟合弃用）。TQQQ 无预设 = ParamSpec
-// 默认(200/500 + 锚200@1.5/1.2 经典过热)。
+// 默认(200/500 + 锚200@1.5/1.1 ——回调线 2026-10-11 由 1.2 改 1.1:TQQQ 分
+// regime 网格稳健改进,单边牛 +9.7pp/震荡牛 +4.5pp/全窗 +3.2pp,MDD 不变)。
 // SPY 预设（2026-10-11 网格研究定稿）：牛熊线 200（SPY 网格山脊 + 媒体语境
 // 牛熊线本尊）+ 恐慌线 850（≈3.4 年深熊抄底线：参数面 300-850 平坦，850 的
 // 增益全在慢熊防守——2008 -26.2% vs 死拿 -39.4%、2022 -7.2% vs -20.0%）+
@@ -127,9 +128,11 @@ function renderParamForm() {
     let val = paramValue(p, mainTk);
     switch (p.type) {
       case "select":
+        // 选中项用 val(= paramValue:手改记忆/per-ticker 预设/ParamSpec 默认三级),
+        // 不再用 p.default——否则 QQQ/SPY 预设的 overheat=on 等预设值在表单上不生效
         return `<label class="field"><span>${p.label}</span>
           <select data-param="${p.key}">${p.options.map(o =>
-            `<option value="${o.value}" ${o.value === p.default ? "selected" : ""}>${o.label}</option>`).join("")}
+            `<option value="${o.value}" ${o.value === val ? "selected" : ""}>${o.label}</option>`).join("")}
           </select></label>`;
       case "tickers":
         return `<label class="field"><span>${p.label}</span>
@@ -270,23 +273,48 @@ function renderResult(data) {
   const mainTk = (data.tickers && data.tickers[0]) || "";
   const sName = sInfo ? sInfo.name : "策略";
   const qp = data.params || {};
-  const overheatOn = qp.overheat === "on";
-  // 过热副标题随实参生成(锚均线/倍数参数化后不再写死 200MA+50%)
-  const ohTxt = overheatOn
-    ? ` + (过热线 MA${qp.oh_anchor ?? 200}×${qp.oh_sell_mult ?? 1.5}止盈 · 过热回调线 MA${qp.oh_anchor ?? 200}×${qp.oh_rebuy_mult ?? 1.2}买回)`
+  // 过热副标题三态箭头链:止盈 → 买回 → 买回后再卖出(第三段是 on/band 的分歧点)
+  const an = qp.oh_anchor ?? 200, sm = qp.oh_sell_mult ?? 1.5, rm = qp.oh_rebuy_mult ?? 1.1;
+  const ohTxt = qp.overheat === "on"
+    ? ` + 过热线 MA${an}×${sm} 止盈 → 回落 MA${an}×${rm} 买回 → 之后按趋势线持有`
+    : qp.overheat === "band"
+    ? ` + 过热线 MA${an}×${sm} 止盈 → 回落 MA${an}×${rm} 买回 → 之后围绕回调线快进快出`
+      + `(跌破×${rm}卖·涨回×${rm}买,跌破趋势线回常规)`
     : "";
   sSub.textContent = `${mainTk} · ${sName}${ohTxt}`;
   sT.style.display = "block";
   sSub.style.display = "block";
   // 未增强基线（后端 overheat=on 时同窗口配跑）：放策略区下方，组名=原策略名
+  // 策略内对照区:快进快出变体(band,「一个开关跑双形态」)+ 未增强基线 两组卡
   const bl = (data.baseline_policy && data.baseline_policy.ok) ? data.baseline_policy : null;
+  const bd = data.band_policy || null;
   const blWrap = $("#baseline-cards");
+  const qp0 = data.params || {};
+  const bdLine = `回调线 MA${qp0.oh_anchor ?? 200}×${qp0.oh_rebuy_mult ?? 1.1} 线上持·线下卖`;
+  const groups = [];
+  if (bd) {
+    const bdp = bd.perf || {};
+    const bdv = (bd.nav || {}).values || [];
+    const bdInit = bdp.invested ?? (bdv.length ? bdv[0] : capitalInput);
+    const bdIrr = (bdp.invested != null && bdp.xirr != null) ? bdp.xirr : (bdp.cagr ?? 0);
+    groups.push(`<div class="bench-group"><h4>${esc(mainTk)} · 快进快出（${bdLine}）</h4>
+      <div class="stat-row">${cardsHtml([
+        { label: "年化 IRR", value: fmtPct(bdIrr, 2), cls: bdIrr >= 0 ? "pos" : "neg",
+          sub: `总收益 ${fmtTotal(bdp.total_return ?? 0)} / ${(bdp.years ?? 0).toFixed(1)} 年 · 同参对照` },
+        { label: "期末账户总额",
+          value: bdv.length ? fmtMoney(bdv[bdv.length - 1]) : "—",
+          cls: (bdv.length && bdv[bdv.length - 1] >= bdInit) ? "pos" : "neg",
+          sub: `初始 ${fmtMoney(bdInit)} · ${(bdv.length ? bdv[bdv.length - 1] / bdInit : 0).toFixed(1)}x` },
+        { label: "最大回撤", value: fmtPct(bdp.max_drawdown ?? 0, 1), cls: "neg",
+          sub: `Calmar ${fmtNum(bdp.calmar ?? 0)} · 调仓 ${bd.n_rebalance_days ?? 0} 日` },
+      ])}</div></div>`);
+  }
   if (bl) {
     const blp = bl.perf || {};
     const blv = (bl.nav || {}).values || [];
     const blInit = blp.invested ?? (blv.length ? blv[0] : capitalInput);
     const blIrr = (blp.invested != null && blp.xirr != null) ? blp.xirr : (blp.cagr ?? 0);
-    blWrap.innerHTML = `<div class="bench-group"><h4>${esc(mainTk)} · ${esc(sName)}</h4>
+    groups.push(`<div class="bench-group"><h4>${esc(mainTk)} · ${esc(sName)}</h4>
       <div class="stat-row">${cardsHtml([
         { label: "年化 IRR", value: fmtPct(blIrr, 2), cls: blIrr >= 0 ? "pos" : "neg",
           sub: `总收益 ${fmtTotal(blp.total_return ?? 0)} / ${(blp.years ?? 0).toFixed(1)} 年 · 同开窗对照` },
@@ -296,7 +324,10 @@ function renderResult(data) {
           sub: `初始 ${fmtMoney(blInit)} · ${(blv.length ? blv[blv.length - 1] / blInit : 0).toFixed(1)}x` },
         { label: "最大回撤", value: fmtPct(blp.max_drawdown ?? 0, 1), cls: "neg",
           sub: `Calmar ${fmtNum(blp.calmar ?? 0)} · 调仓 ${bl.n_rebalance_days} 日` },
-      ])}</div></div>`;
+      ])}</div></div>`);
+  }
+  if (groups.length) {
+    blWrap.innerHTML = groups.join("");
     blWrap.style.display = "block";
   } else {
     blWrap.style.display = "none";
@@ -352,30 +383,41 @@ let navChart = null, ddChart = null, annualChart = null;
 // 与配色（语义）彻底解耦：调整顺序不会让颜色漂移。
 const STRATEGY_COLOR = "#58a6ff";                // 主策略：蓝（两图主曲线/主柱同色）
 const BASELINE_COLOR = "rgba(88,166,255,0.45)";  // 未增强基线：同色系半透明（同一策略的另一种形态）
+const BAND_COLOR = "#39c5cf";                    // 快进快出变体（band）：青虚线（另一个策略族形态;
+                                                 // 第 4 位基准也用青——legend/虚线可区分,系列显式命名）
 const BENCH_COLORS = ["#d29922", "#a371f7", "#db61a2", "#39c5cf"];  // 基准轮转：黄/紫/粉/青
 
-// 系列命名（两图统一）：配跑基线时 主=「策略.增强」基线=「策略」；
+// 系列命名（两图统一）：配跑基线时 主=「策略.增强」、快进出变体=「策略.快进出」、基线=「策略」；
 // 无基线时视有无基准叫「策略」/「组合」。返回的顺序就是两图的系列语义顺序。
 function seriesMeta(data) {
   const hasBl = !!(data.baseline_policy && data.baseline_policy.ok);
   const hasBench = Object.keys(data.benchmarks || {}).length > 0;
   return {
     hasBl, hasBench,
+    hasBand: !!data.band_policy,
     mainName: hasBl ? "策略.增强" : (hasBench ? "策略" : "组合"),
+    bandName: "策略.快进出",
     baselineName: "策略",
   };
 }
 
 function renderNavChart(data) {
   navChart = navChart || echarts.init($("#nav-chart"));
-  // 系列顺序 = 语义顺序（与年度柱状图一致）：主策略 → 基线（若有） → 基准；
+  // 系列顺序 = 语义顺序（与年度柱状图一致）：主策略 → 快进出变体(若有) → 基线（若有） → 基准；
   // 颜色全部显式指定（见系列视觉语义常量区），与顺序解耦
-  const { hasBl, mainName, baselineName } = seriesMeta(data);
+  const { hasBl, hasBand, mainName, bandName, baselineName } = seriesMeta(data);
   const series = [{
     name: mainName,
     type: "line", data: data.nav.values, showSymbol: false,
     lineStyle: { width: 2, color: STRATEGY_COLOR },
   }];
+  // 快进快出变体（overheat=on 时 runner 同参配跑的 band 形态）：青虚线
+  if (hasBand) {
+    series.push({
+      name: bandName, type: "line", data: data.band_policy.nav.values, showSymbol: false,
+      lineStyle: { width: 1.5, type: "dashed", color: BAND_COLOR, opacity: 0.9 },
+    });
+  }
   // 未增强基线（overheat=on 配跑）：与主策略同色系虚线半透明（同策略的另一种形态）
   if (hasBl) {
     series.push({
@@ -508,23 +550,32 @@ function renderDDChart(data) {
 function renderAnnualChart(data) {
   const ar = (data.perf || {}).annual_returns || {};
   const bl = (data.baseline_policy && data.baseline_policy.ok) ? data.baseline_policy : null;
+  const bp = data.band_policy;
   const benches = Object.entries(data.benchmarks || {});
-  // 年份 = 策略/未增强基线/全部基准年度收益的并集（有数据的年份才出柱）
+  // 年份 = 策略/快进出变体/未增强基线/全部基准年度收益的并集（有数据的年份才出柱）
   const years = [...new Set([
     ...Object.keys(ar),
+    ...(bp ? Object.keys(bp.perf.annual_returns || {}) : []),
     ...(bl ? Object.keys(bl.perf.annual_returns || {}) : []),
     ...benches.flatMap(([, b]) => Object.keys(b.perf.annual_returns || {})),
   ])].sort();
   annualChart = annualChart || echarts.init($("#annual-chart"));
-  // 系列顺序 = 语义顺序（与净值折线图一致）：主策略 → 基线（若有） → 基准；
+  // 系列顺序 = 语义顺序（与净值折线图一致）：主策略 → 快进出变体(若有) → 基线（若有） → 基准；
   // 颜色全部显式指定（见系列视觉语义常量区），与顺序解耦；
   // 正负由柱向表达（0 轴上下），颜色只负责区分系列
-  const { mainName, baselineName } = seriesMeta(data);
+  const { mainName, bandName, baselineName } = seriesMeta(data);
   const series = [{
     name: mainName, type: "bar",
     data: years.map(y => ar[y] ?? null), barMaxWidth: 34,
     itemStyle: { color: STRATEGY_COLOR },
   }];
+  if (bp) {
+    series.push({
+      name: bandName, type: "bar",
+      data: years.map(y => (bp.perf.annual_returns || {})[y] ?? null),
+      itemStyle: { color: BAND_COLOR }, barMaxWidth: 34,
+    });
+  }
   if (bl) {
     series.push({
       name: baselineName, type: "bar",

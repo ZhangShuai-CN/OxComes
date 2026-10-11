@@ -88,8 +88,8 @@ async function loadHeatmap() {
 
 // ── 宏观指标:市场宽度 + VIX(从 brief.js 迁入) ────────────────
 
-function card(label, value, sub, cls = "") {
-  return `<div class="stat-card"><div class="label">${label}</div>
+function card(label, value, sub, cls = "", cardCls = "") {
+  return `<div class="stat-card ${cardCls}"><div class="label">${label}</div>
           <div class="value ${cls}">${value}</div><div class="sub">${sub || ""}</div></div>`;
 }
 
@@ -103,8 +103,9 @@ async function loadMacroStats() {
   if (breadth && breadth.ok) {
     const cls = breadth.state === "improving" ? "pos" :
                 (breadth.state === "narrowing" ? "warn" : "");
+    const p10 = breadth.pctile_10y != null ? `10年 ${breadth.pctile_10y}%位 · ` : "10年分位待数据 · ";
     cards.push(card("市场宽度", breadth.pctile_52w + "%位",
-                    `21日 ${breadth.chg_21d}% · ${breadth.state_desc}`, cls));
+                    `${p10}21日 ${breadth.chg_21d}% · ${breadth.state_desc}`, cls));
   }
   if (vix && vix.ok) {
     const r = vix.regime || {};
@@ -152,8 +153,116 @@ async function loadMacroStats() {
   }
 }
 
+// ── 波动率位置 + 牛形体制(2026-10-12;/api/market/indicators) ──
+
+function volCls(p) {           // 分位→色:低分位=稳,高分位=警
+  if (p == null) return "";
+  return p >= 80 ? "warn" : (p <= 30 ? "pos" : "");
+}
+
+async function loadIndicators() {
+  const d = await fetch("/api/market/indicators").then(r => r.json()).catch(() => null);
+  if (!d || !d.ok) { return; }
+  // 波动率卡:SPY/QQQ × 20日/63日,当前值+10年分位
+  const vcards = [];
+  for (const tk of ["SPY", "QQQ"]) {
+    const v = (d.vol || {})[tk];
+    if (!v || v.error) { continue; }
+    for (const [key, name] of [["rv20", "20日实现波动率"], ["rv63", "63日实现波动率"]]) {
+      const e = v[key];
+      if (!e) { continue; }
+      const pct = e.pctile_10y != null ? `10年分位 ${e.pctile_10y}%` : (e.note || "分位缺");
+      vcards.push(card(`${tk} ${name}`, (e.value * 100).toFixed(1) + "%", pct, volCls(e.pctile_10y)));
+    }
+  }
+  // 板块分化度(成份股分化的板块级近似):与指数时序波动正交——指数稳+分化高
+  // = 头部集中护盘、内部两极分化的窄基结构市。色档由后端 level/cls 给
+  // (极高红/高黄/中灰/低绿,按 10 年分位刻度,绝对值分布右偏不可直接比)
+  const dsp = d.dispersion;
+  if (dsp && dsp.available) {
+    const rg = dsp.range_10y || {};
+    const rgTxt = rg.mean != null
+      ? ` · 十年均 ${ (rg.mean * 100).toFixed(1)}% / 区间 ${(rg.min * 100).toFixed(1)}~${(rg.max * 100).toFixed(1)}%`
+      : "";
+    // 整卡警示背景:高=黄卡、极高=红卡(与数字色同档),结构性警讯一眼可见
+    const cardBg = dsp.level === "极高" ? "alert-bg" : (dsp.level === "高" ? "warn-bg" : "");
+    vcards.push(card(`板块分化 · ${dsp.level || "—"}${dsp.level === "极高" ? "⚠" : ""}`,
+                     (dsp.value * 100).toFixed(1) + "%",
+                     `10年分位 ${dsp.pctile_10y}% · 63日均值${rgTxt}`, dsp.cls || "", cardBg));
+  }
+  const volPanel = $("#panel-vol");
+  if (vcards.length) { $("#vol-cards").innerHTML = vcards.join(""); }
+  else { volPanel.style.display = "none"; }
+  if (d.as_of) { $("#vol-meta").textContent = `截至 ${d.as_of}`; }
+
+  // 牛形体制卡:SPY/QQQ 判定 + 指标明细 + 最近历史年
+  const rcards = [];
+  for (const tk of ["SPY", "QQQ"]) {
+    const r = (d.regime || {})[tk];
+    if (!r) { continue; }
+    const near = r.nearest ? ` · 最接近历史年:${r.nearest.year}` : "";
+    const cls = r.label === "单边牛" ? "pos" : (r.label === "震荡牛" ? "warn" :
+                 (r.label === "熊市" ? "neg" : ""));
+    rcards.push(card(`${tk} · ${r.label}`, (r.ret_252 * 100).toFixed(1) + "%",
+                     `R² ${r.r2} · ${r.dips} 次10%校正 · ER ${r.er}${near}`, cls));
+  }
+  const regimePanel = $("#panel-regime");
+  if (rcards.length) { $("#regime-cards").innerHTML = rcards.join(""); }
+  else { regimePanel.style.display = "none"; }
+  if (d.as_of) { $("#regime-meta").textContent = `截至 ${d.as_of}`; }
+}
+
+// ── 估值位置(PE/EPS 十年月度分位,2026-10-12;multpl S&P500) ──
+
+async function loadValuation() {
+  const d = await fetch("/api/market/valuation").then(r => r.json()).catch(() => null);
+  if (!d || !d.ok) { $("#panel-value").style.display = "none"; return; }
+  const cards = [];
+  const spy = d.spy || {};
+  if (spy.pe) {
+    const p = spy.pe;
+    const rg = p.range_10y || {};
+    const cardBg = p.cls === "neg" ? "alert-bg" : (p.cls === "warn" ? "warn-bg" : "");
+    cards.push(card(`SPY PE(TTM)${p.level ? " · " + p.level : ""}`, p.value,
+      `10年分位 ${p.pctile_10y}%${rg.mean ? ` · 十年均 ${rg.mean} / 区间 ${rg.min}~${rg.max}` : ""}` +
+      ` · ${p.as_of}`, p.cls || "", cardBg));
+  }
+  if (spy.eps) {
+    const e = spy.eps;
+    const rg = e.range_10y || {};
+    const yoy = e.yoy != null ? ` · 同比 ${e.yoy >= 0 ? "+" : ""}${e.yoy}%` : "";
+    cards.push(card("SPY EPS(TTM)", "$" + e.value,
+      `10年分位 ${e.pctile_10y}%${yoy}${rg.mean ? ` · 十年均 $${rg.mean}` : ""} · ${e.as_of}`,
+      e.cls || ""));
+  }
+  if (spy.shiller) {
+    const s = spy.shiller;
+    const rg = s.range_10y || {};
+    const cardBg = s.cls === "neg" ? "alert-bg" : (s.cls === "warn" ? "warn-bg" : "");
+    cards.push(card(`Shiller PE${s.level ? " · " + s.level : ""}`, s.value,
+      `10年分位 ${s.pctile_10y}% · 全史(1871)分位 ${s.pctile_full}%` +
+      (rg.mean ? ` · 十年均 ${rg.mean}` : ""), s.cls || "", cardBg));
+  }
+  if (spy.erp) {
+    const e = spy.erp;
+    const cardBg = e.cls === "neg" ? "alert-bg" : (e.cls === "warn" ? "warn-bg" : "");
+    cards.push(card(`ERP · ${e.level || ""}`, (e.value >= 0 ? "+" : "") + e.value + "pp",
+      `E/P−10Y · 10年分位 ${e.pctile_10y}% · ${e.range_full_note} · ${e.as_of}`,
+      e.cls || "", cardBg));
+  }
+  const v = $("#val-cards");
+  if (cards.length) { v.innerHTML = cards.join(""); }
+  else { $("#panel-value").style.display = "none"; return; }
+  const meta = [];
+  if ((d.spy || {}).pe) { meta.push(`S&P500 as of ${d.spy.pe.as_of}`); }
+  if (d.qqq && !d.qqq.available) { meta.push("QQQ: " + (d.qqq.note || "源未接入")); }
+  $("#val-meta").textContent = meta.join(" · ");
+}
+
 loadHeatmap();
 loadMacroStats();
+loadIndicators();
+loadValuation();
 window.addEventListener("resize", () => {
   chart && chart.resize();
   breadthChart && breadthChart.resize();

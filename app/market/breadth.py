@@ -30,6 +30,11 @@ def get_breadth(days: int = 252) -> Dict:
     chg_5d = float(last / ratio.iloc[-6] - 1) if len(ratio) > 6 else None
     chg_21d = float(last / ratio.iloc[-22] - 1) if len(ratio) > 22 else None
     pctile = float((ratio < last).mean() * 100)
+    # 10 年分位(2026-10-12):全长比值序列最近 2520 交易日分布中的位置
+    # (方法论对标买方报告的分量级 percentile-of-history 口径)
+    full_ratio = joined["RSP"] / joined["SPY"]
+    tail10y = full_ratio.tail(2520)
+    pctile_10y = float((tail10y < last).mean() * 100) if len(tail10y) > 250 else None
 
     if chg_21d is None:
         state, state_desc = "unknown", "样本不足"
@@ -48,6 +53,7 @@ def get_breadth(days: int = 252) -> Dict:
         "chg_5d": round(chg_5d * 100, 2) if chg_5d is not None else None,
         "chg_21d": round(chg_21d * 100, 2) if chg_21d is not None else None,
         "pctile_52w": round(pctile, 1),
+        "pctile_10y": round(pctile_10y, 1) if pctile_10y is not None else None,
         "state": state,
         "state_desc": state_desc,
         "series": {"dates": [str(d.date()) for d in ratio.index],

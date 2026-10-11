@@ -38,7 +38,8 @@ class BacktestRun:
     n_rebalance_days: int = 0              # 总交易次数口径：有成交发生的交易日数
     n_buys: int = 0                        # 逐笔买入笔数（不含定投入金）
     n_sells: int = 0                       # 逐笔卖出笔数
-    sibling: Optional["BacktestRun"] = None  # overheat=on 配跑：同窗口 overheat=off 基线（前端策略内对照）
+    sibling: Optional["BacktestRun"] = None  # overheat=on/band 配跑：同窗口 overheat=off 基线（前端策略内对照）
+    band_policy: Optional[dict] = None  # overheat=on 配跑：同参 overheat=band(快进快出)变体的精简 payload
     error: Optional[str] = None
 
     TRADES_CAP = 20_000                    # payload 安全阀（最坏 DCA 周定投 30 年 ≈1561 笔）
@@ -65,6 +66,8 @@ class BacktestRun:
             # 过热增强的基线对照（overheat=off 同窗口重跑；主策略未开增强时为 None）
             "baseline_policy": (self.sibling.to_api_payload()
                                 if self.sibling is not None and self.sibling.ok else None),
+            # 「一个开关跑双形态」:overheat=on 时同参配跑 band(快进快出)变体
+            "band_policy": self.band_policy,
             "benchmarks": {
                 name: {
                     "nav": {"dates": [str(d.date()) for d in s.index],
@@ -398,9 +401,10 @@ def run_backtest(
                 "期末/总投入即倍数分母;想只跑纯定投,把「初始资金」设为 0。"
             )
 
-        # 过热增强开启时配跑同窗口的未增强基线（overheat=off）：前端把两种形态并排
-        # （卡片分组/折线/柱状/交易明细 diff），用户可直接看到增强带来的差异
-        if strategy_id == "ma200_panic" and clean_params.get("overheat") == "on":
+        # 过热增强开启时配跑同窗口对照：①未增强基线(overheat=off)——卡片/折线/
+        # 柱状/交易明细 diff 并排;②快进快出变体(overheat=band,同参)——
+        # 「一个开关跑双形态」(2026-10-11 用户定稿),前端卡组+折线并排展示
+        if strategy_id == "ma200_panic" and clean_params.get("overheat") in ("on", "band"):
             try:
                 run.sibling = run_backtest(
                     strategy_id=strategy_id,
@@ -415,6 +419,28 @@ def run_backtest(
                     )
             except Exception as e:
                 logger.warning("过热基线配跑失败(不影响主结果): %s", e)
+            if clean_params.get("overheat") == "on":
+                try:
+                    band_run = run_backtest(
+                        strategy_id=strategy_id,
+                        params={**clean_params, "overheat": "band"},
+                        tickers=tickers, start=start, end=end, benchmarks=[],
+                        initial_capital=initial_capital, rebalance_cost_bps=rebalance_cost_bps,
+                        use_synth_tqqq=use_synth_tqqq, allow_leverage=allow_leverage,
+                        execution_price=execution_price, prewarm=prewarm)
+                    if band_run.ok:
+                        # 精简 payload(比照 baseline_policy 但不带 trades——变体不进交易明细)
+                        run.band_policy = {
+                            "perf": band_run.perf,
+                            "nav": {"dates": [str(d.date()) for d in band_run.nav.index],
+                                    "values": [round(float(v), 2) for v in band_run.nav.values]},
+                            "n_rebalance_days": band_run.n_rebalance_days,
+                        }
+                        run.notes.append(
+                            "ℹ 已同时跑两种买回后处置形态：按趋势线持有(主)与快进快出(过热回调线)对照。"
+                        )
+                except Exception as e:
+                    logger.warning("快进快出变体配跑失败(不影响主结果): %s", e)
 
         for b in benchmarks or []:
             try:

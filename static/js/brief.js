@@ -112,7 +112,7 @@ function renderMaChart(el, d) {
     { key: "ma200", short: "趋势线", name: lineLabels.ma200 || "趋势线 MA200", dash: false },
     { key: "ma500", short: "恐慌线", name: lineLabels.ma500 || "恐慌线 MA500", dash: false },
     { key: "oh_sell", short: "过热线", name: lineLabels.oh_sell || "过热线 MA200×1.5", dash: true },
-    { key: "oh_rebuy", short: "过热回调线", name: lineLabels.oh_rebuy || "过热回调线 MA200×1.2", dash: true },
+    { key: "oh_rebuy", short: "过热回调线", name: lineLabels.oh_rebuy || "过热回调线 MA200×1.1", dash: true },
   ];
   // 买卖信号打点:backend 只给窗口内翻转日(信号收盘确认日)。买点打 Low 下方、
   // 卖点打 High 上方(±2% 偏移避让蜡烛本体);c.kline 原序 [o, h, l, c]。

@@ -111,10 +111,10 @@ def test_ma200_panic_shallow_dip_sell_then_reentry():
 
 
 def test_ma200_panic_overheat_sell_and_rebuy():
-    """过热增强完整环（overheat=on，滞回带）：
+    """过热增强完整环（overheat=on，滞回带；默认倍数 1.5/1.1，2026-10-11 改）：
     缓涨持有 → 连续+30% 使 close/ma5 达 1.53（>1.5）止盈卖出 → 过热等待
-    → 回落 day66 ratio=1.22（在 1.2~1.5 带内，**不买回**）
-    → day67 ratio=1.07（进 (200MA, 1.2×200MA] 带内）买回 → day68 跌破200MA（cross_dn）卖出。
+    → 回落 day66 ratio=1.22（在 1.1~1.5 带内，**不买回**）
+    → day67 ratio=1.07（进 (200MA, 1.1×200MA] 带内）买回 → day68 跌破200MA（cross_dn）卖出。
 
     序列（trend=5, panic=20）：缓涨60天(100→159) → +30%×6(→767.46) → 缓降700→645。
     等比日涨幅 r 的 ratio 稳态 = 5/(1+r⁻¹+…+r⁻⁴)：+10% 仅 1.21、+25% 恰 1.49 均不可达，
@@ -266,3 +266,70 @@ def test_registry_completeness():
         assert cls.schema()["params"] is not None
         # 每个策略可实例化且参数可走完 validate 补全默认值
         params_mod.validate_params(cls, {})
+
+
+# ---------------- ma200_panic 过热三态:band(快进快出) ----------------
+# 用户 2026-10-11 定稿:过热买回后再出场两形态。分歧语义锚定序列(见
+# test_ma200_panic_overheat_band_roundtrip):买回日之后 band 以回调线为
+# 卖出线(在线下即卖、涨回线上再买),on 回普通持有(跌回趋势线才卖)。
+
+def test_ma200_panic_overheat_band_roundtrip():
+    """band 形态完整环:trend=5/panic=20/锚5@1.5/1.1:
+    过热(day62 ratio1.53)止盈 → wait → 回落 day67(ratio1.05≤1.1)买回
+    band_hold → day68(ratio1.02,仍在回调线下)跌破回调线卖出 → wait_up
+    → day70 涨回回调线上方(ratio1.15)买回 → day71 崩盘卖出。
+    对照 on 形态:day67 买回后一直持有到 day71 崩盘(day68-70 不卖)。"""
+    qqq = [100.0 + 1.0 * i for i in range(60)]
+    qqq += [round(159.0 * 1.3 ** k, 2) for k in range(1, 7)]
+    qqq += [700.0, 670.0, 700.0, 790.0, 850.0, 300.0]
+    base = {"ma_trend": 5, "ma_panic": 20, "oh_anchor": 5,
+            "oh_sell_mult": 1.5, "oh_rebuy_mult": 1.1,
+            "signal_ticker": "QQQ", "holding_ticker": "TQQQ"}
+    w_band = _built_w(MA200PanicStrategy, {**base, "overheat": "band"}, qqq)
+    w_on = _built_w(MA200PanicStrategy, {**base, "overheat": "on"}, qqq)
+    # 两形态共同段:day62 过热止盈、day67 回落买回、day71 崩盘卖出
+    assert w_band.iloc[59] == 1.0 and w_on.iloc[59] == 1.0
+    assert w_band.iloc[62] == 0.0 and w_on.iloc[62] == 0.0      # 止盈
+    assert w_band.iloc[67] == 1.0 and w_on.iloc[67] == 1.0      # 买回
+    assert w_band.iloc[71] == 0.0 and w_on.iloc[71] == 0.0      # 崩盘离场
+    # 分歧段:band day68 跌破回调线即卖、day70 涨回买回;on 一直持有
+    assert w_band.iloc[68] == 0.0, "band 应在 day68 跌破回调线卖出"
+    assert w_band.iloc[69] == 0.0
+    assert w_band.iloc[70] == 1.0, "band 应在 day70 涨回回调线买回"
+    assert w_on.iloc[68:71].eq(1.0).all(), "on 买回后应持有到崩盘"
+
+
+def test_ma200_panic_overheat_band_crash_exits_to_flat():
+    """band 形态的作废出口:跌破趋势线(而非回调线)时回普通空仓语义,
+    恐慌线抄底通道存活(2026-10-11 研究:B 无出口版 15.85% 年化的教训)。"""
+    qqq = [100.0 + 1.0 * i for i in range(60)]
+    qqq += [round(159.0 * 1.3 ** k, 2) for k in range(1, 7)]
+    qqq += [700.0, 670.0, 660.0, 650.0, 640.0, 630.0, 620.0, 500.0, 400.0]
+    base = {"ma_trend": 5, "ma_panic": 20, "oh_anchor": 5,
+            "oh_sell_mult": 1.5, "oh_rebuy_mult": 1.1,
+            "signal_ticker": "QQQ", "holding_ticker": "TQQQ"}
+    w = _built_w(MA200PanicStrategy, {**base, "overheat": "band"}, qqq)
+    # 系列尾段连续阴跌破趋势线:一旦 <= ma5 进入 flat,收盘 < ma20(恐慌区)
+    # 时按普通恐慌规则买回(而非困在 wait_up 死等涨回回调线)
+    tail_px = qqq[-3:]
+    ma20_tail = sum(qqq[-8:]) / 8
+    assert min(tail_px) < ma20_tail, "测试前提:尾段应进入恐慌区"
+    assert w.iloc[-1] == 1.0, "恐慌区收盘且 flat → 恐慌抄底买入(通道存活)"
+
+
+def test_select_hidden_values_validate():
+    """select 的 hidden_values:校验层放行内部值(如 overheat=band 由 runner 配跑),
+    但 schema() 的 options 不含它——UI 不渲染、API 内部调用合法。"""
+    cls = get_strategy("ma200_panic")
+    clean = params_mod.validate_params(cls, {"overheat": "band"})
+    assert clean["overheat"] == "band"
+    schema_opts = [o["value"] for p in cls.schema()["params"] if p["key"] == "overheat"
+                   for o in p["options"]]
+    assert "band" not in schema_opts and "on" in schema_opts
+    # 用户可传的仍是 off/on;未知值照旧拒绝
+    for bad in ("auto", "BAND", 1):
+        try:
+            params_mod.validate_params(cls, {"overheat": bad})
+            raise AssertionError("未知 select 值未拦截")
+        except ValueError:
+            pass
