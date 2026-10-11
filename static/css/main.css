@@ -60,6 +60,15 @@ input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .hint { font-size: 12px; color: var(--text-dim); margin: 6px 0; line-height: 1.6; }
 .hint label { margin-right: 8px; }
+/* 回测页常用标的快捷选择（点击填入主标的输入框并联动策略参数） */
+.ticker-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: -2px 0 8px; }
+.chip {
+  padding: 3px 12px; border-radius: 999px; font-size: 12px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text-dim);
+  font-family: inherit; cursor: pointer;
+}
+.chip:hover { color: var(--text); }
+.chip.active { color: var(--accent); border-color: var(--accent); }
 
 button.primary {
   width: 100%; padding: 10px; border-radius: 8px; border: none; cursor: pointer;
@@ -106,6 +115,10 @@ h4.sub-title { margin: 2px 0 10px; font-size: 13px; font-weight: 600; color: var
 .event-date { color: var(--text-dim); min-width: 48px; }
 .event-cat { min-width: 64px; font-size: 12px; }
 /* 当日策略提醒卡(brief 页) */
+/* 当日策略提醒(多标的块:每标的一张 K 线图 + 信号卡组) */
+.ma-block { border-top: 1px solid var(--border); padding-top: 6px; }
+.ma-block:first-child { border-top: none; }
+.ma-title { font-size: 14px; font-weight: 600; margin: 8px 0 2px; color: var(--text); }
 .ma-card { padding: 10px 0; border-bottom: 1px solid var(--border); }
 .ma-name { font-size: 13px; color: var(--text); margin-bottom: 4px; }
 .ma-action { font-size: 15px; font-weight: 600; margin: 4px 0; }

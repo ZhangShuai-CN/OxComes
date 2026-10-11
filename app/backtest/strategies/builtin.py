@@ -77,60 +77,72 @@ def _asset_columns(prices: pd.DataFrame, signal: str, holding: str) -> None:
 
 @register
 class MA200PanicStrategy(Strategy):
-    """200MA 趋势 + 500MA 恐慌抄底（事件驱动仓位机，用户三轮确认的语义）。
+    """趋势线 + 恐慌线抄底 + 可选过热止盈（事件驱动仓位机，四线命名体系）。
 
-    t 日收盘信号 → t+1 日开盘成交（引擎 shift(1) 统一防前视）：
-    - 跌破 200MA（昨收 ≥ 线上、今收 < 线下）→ 卖出 ——**唯一的卖出触发**
-    - 空仓中站上 200MA → 买入（趋势进场）
-    - 空仓中收盘 < 500MA → 买入（恐慌区抄底）
-    - 站上 500MA **不触发任何动作**：恐慌仓反弹脱离恐慌区后继续持有，
-      直到站上 200MA（已在场内，无操作），将来再跌破 200MA 才离场。
+    t 日收盘信号 → t+1 日开盘成交（引擎 shift(1) 统一防前视）。
+    四条信号线（用户 2026-10-11 定名）：
+    - **趋势线**（ma_trend）：持仓中收盘跌破（昨收 ≥ 线上、今收 < 线下）→ 卖出
+      ——**唯一的常规卖出触发**；空仓中站上 → 趋势进场。
+    - **恐慌线**（ma_panic）：空仓中收盘 < 恐慌线 → 恐慌抄底买入。恐慌线的
+      穿越对持仓**零操作**（恐慌仓反弹脱离恐慌区后继续持有，出场 = 站上
+      趋势线之后的再次跌破趋势线）。
+    - **过热线**（过热锚均线 × oh_sell_mult）：持仓中收盘冲过 → 过热止盈卖出，
+      进入「过热等待」态；空仓遇此条件同样不进场、直接等待。
+    - **过热回调线**（过热锚均线 × oh_rebuy_mult）：等待中收盘回落到线上且仍
+      在趋势线上方 → 买回；回调线～过热线带内继续等待；跌破趋势线 → 等待
+      作废，恢复普通空仓语义（恐慌线/站上规则接管）。
 
-    「跌破200」用交叉事件（从上方跌到下方）而非状态：恐慌买入时价格已在
-    200MA 下方，状态语义会买入次日即卖形成死循环；事件语义下恐慌仓的
-    出场 = 站上 200MA 之后的再次跌破。
+    「跌破趋势线」用交叉事件（从上方跌到下方）而非状态：恐慌买入时价格已在
+    趋势线下方，状态语义会买入次日即卖形成死循环；事件语义下恐慌仓的出场
+    = 拥有后的再跌破。
 
-    过热增强（overheat="on"，用户 2026-10-10 拍板）：滞回带止盈——
-    - 持仓中收盘 > 趋势均线×1.5 → **次日开盘卖出**，进入「过热等待」态
-      （空仓遇此条件同样直接等待，不进场）
-    - 过热等待中，收盘回落到 ≤ 均线×1.2 且仍在线上 → **次日开盘买回**；
-      1.2×~1.5× 带内继续等待；跌落到均线下方 → 恢复普通空仓语义
-      （恐慌区/站上规则当日接管）
+    **过热锚均线独立于趋势线**（2026-10-11 研究：锚是最敏感的设计维度——
+    锚=长趋势线时中低倍数=普通牛市常态地带，策略变异成半永续等待；短锚
+    ×1.15 才精确框住陡峭主升段）。默认锚=200=趋势线默认、倍数 1.5/1.2，
+    即经典 TQQQ 过热语义，数值行为与旧版逐位兼容。QQQ 研究最优预设：
+    MA300/400 底仓 + 锚150 @1.15/1.02（2010后 21.07%）。
     """
     id = "ma200_panic"
-    name = "200MA趋势 + 500MA恐慌抄底"
+    name = "MA趋势 + MA恐慌抄底（可选过热止盈）"
     description = (
-        "收盘跌破200MA→次日开盘卖出(唯一卖出)；空仓时收盘站上200MA→次日开盘买入；"
-        "收盘跌破500MA(恐慌区)→次日开盘买入。恐慌仓反弹站上500MA不卖出："
-        "继续持有直到站上200MA后再跌破200MA才离场。"
-        "可选过热增强：收盘>200MA+50%止盈卖出，回落到200MA+20%买回。"
+        "趋势线：持仓中收盘跌破→次日开盘卖出(唯一常规卖出)；空仓站上→买入。"
+        "恐慌线：空仓中收盘低于→次日开盘恐慌抄底买入；恐慌仓出场=站上趋势线后再跌破趋势线。"
+        "可选过热增强：过热线(锚均线×倍数)止盈卖出，回落到过热回调线(锚均线×倍数)买回——"
+        "锚均线独立于趋势线，倍数可分别设置。"
     )
-
-    OVERHEAT_SELL = 1.5    # 收盘 > 趋势均线×1.5 → 过热止盈
-    OVERHEAT_REBUY = 1.2   # 收盘 ≤ 趋势均线×1.2 且线上 → 买回
 
     params = [
         ParamSpec("signal_ticker", "信号资产", type="string", default="TQQQ"),
         ParamSpec("holding_ticker", "持仓资产", type="string", default="TQQQ"),
-        ParamSpec("ma_trend", "趋势均线(天数)", type="number", default=200, min=5, max=500, step=1,
+        ParamSpec("ma_trend", "趋势线(天数)", type="number", default=200, min=5, max=500, step=1,
                   grid=[100, 150, 200, 250]),
-        ParamSpec("ma_panic", "恐慌抄底均线(天数)", type="number", default=500, min=21, max=1000, step=1,
+        ParamSpec("ma_panic", "恐慌线(天数)", type="number", default=500, min=21, max=1000, step=1,
                   grid=[300, 400, 500, 600]),
+        ParamSpec("oh_anchor", "过热锚均线(天数)", type="number", default=200, min=5, max=1000, step=1,
+                  grid=[100, 150, 200]),
+        ParamSpec("oh_sell_mult", "过热线倍数(×锚均线)", type="number", default=1.5, min=1.0, max=3.0,
+                  step=0.01),
+        ParamSpec("oh_rebuy_mult", "过热回调线倍数(×锚均线)", type="number", default=1.2, min=0.05,
+                  max=3.0, step=0.01),
         ParamSpec("weight", "持仓权重(1=全仓)", type="number", default=1.0, min=0.05, max=1.0, step=0.05),
         ParamSpec("overheat", "过热增强", type="select", default="off",
                   options=[{"value": "off", "label": "关闭"},
-                           {"value": "on", "label": "开启（收盘>200MA+50%止盈，回落200MA+20%买回）"}]),
+                           {"value": "on", "label": "开启（过热线止盈 + 过热回调线买回）"}]),
     ]
 
     def warmup_days(self, params: dict) -> int:
         return int(max(float(params.get("ma_trend") or 200),
-                       float(params.get("ma_panic") or 500)))
+                       float(params.get("ma_panic") or 500),
+                       float(params.get("oh_anchor") or 200)))
 
     def build(self, prices: pd.DataFrame, params: dict) -> StrategyOutput:
         signal = params.get("signal_ticker") or "QQQ"
         holding = params.get("holding_ticker") or "TQQQ"
         trend_n = int(params.get("ma_trend") or 200)
         panic_n = int(params.get("ma_panic") or 500)
+        anchor_n = int(params.get("oh_anchor") or trend_n)   # 过热线/回调线的锚(默认=趋势线)
+        sell_m = float(params.get("oh_sell_mult") or 1.5)
+        rebuy_m = float(params.get("oh_rebuy_mult") or 1.2)
         weight = float(params.get("weight") or 1.0)
         overheat = str(params.get("overheat") or "off") == "on"
 
@@ -142,14 +154,15 @@ class MA200PanicStrategy(Strategy):
         sig_px = prices[signal]
         ma_t = sig_px.rolling(trend_n, min_periods=trend_n).mean()
         ma_p = sig_px.rolling(panic_n, min_periods=panic_n).mean()
-        above_t = (sig_px > ma_t).fillna(False)          # 200MA 上方（NaN 比较=False）
-        in_panic = (sig_px < ma_p).fillna(False)         # 500MA 下方（恐慌区）
+        ma_o = sig_px.rolling(anchor_n, min_periods=anchor_n).mean()   # 过热锚均线(独立于趋势线)
+        above_t = (sig_px > ma_t).fillna(False)          # 趋势线上方（NaN 比较=False）
+        in_panic = (sig_px < ma_p).fillna(False)         # 恐慌线下方（恐慌区）
         enter = above_t | in_panic                       # 买入：站上趋势线 或 恐慌区
         # 卖出「跌破」= 交叉事件：昨日线上 → 今日线下
         cross_dn = above_t.shift(1, fill_value=False) & ~above_t
-        # 过热增强：卖出/买回阈值线（滞回带防鞭打）
-        oh_sell = (sig_px > ma_t * self.OVERHEAT_SELL).fillna(False) if overheat else None
-        oh_rebuy = (sig_px <= ma_t * self.OVERHEAT_REBUY).fillna(False) if overheat else None
+        # 过热增强：过热线/过热回调线（锚均线×倍数，滞回带防鞭打）
+        oh_sell = (sig_px > ma_o * sell_m).fillna(False) if overheat else None
+        oh_rebuy = (sig_px <= ma_o * rebuy_m).fillna(False) if overheat else None
 
         w = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
         state = "flat"    # flat 空仓 | hold 持仓 | wait 过热等待（等回落买回）

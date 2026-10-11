@@ -92,18 +92,30 @@ async def run(req: BacktestRequest):
     return result.to_api_payload()
 
 
-@router.get("/ma_signal")
-async def ma_signal():
-    """当日策略提醒:ma200_panic 过热增强形态(overheat=on)的最新信号快照
-    (2026-10-11 起只保留增强形态,plain 形态展示弃用;K 线图同步打买卖信号点)。
+# 当日策略提醒的标的与策略配置(2026-10-11 双标的):
+# - TQQQ 跟单形态:经典 200/500 + 独立锚200@1.5/1.2 过热(页面沿用已久的跟单口径)
+# - QQQ 共识版:牛熊线200 出场 + 恐慌线400 抄底 + 对牛熊线乖离20%止盈/10%回调
+#   (2026-10-11 用户终拍:对称乖离档;历史档位参考——×1.3 近零触发=闲置,
+#   ×1.18 扫描最优(全窗 15.37%)、×1.1 全窗 13.16%/2010后 18.90%)
+SIGNAL_CONFIGS = [
+    {
+        "ticker": "TQQQ", "label": "跟单 · 3x 经典",
+        "params": {"ma_trend": 200, "ma_panic": 500, "oh_anchor": 200,
+                   "oh_sell_mult": 1.5, "oh_rebuy_mult": 1.2, "overheat": "on"},
+    },
+    {
+        "ticker": "QQQ", "label": "共识版 · 牛熊线200/恐慌线400/乖离20/10",
+        "params": {"ma_trend": 200, "ma_panic": 400, "oh_anchor": 200,
+                   "oh_sell_mult": 1.2, "oh_rebuy_mult": 1.1, "overheat": "on"},
+    },
+]
 
-    语义 = 每日收盘后的执行指令(引擎 next_open 口径):t 收盘信号 → t+1 开盘
-    成交。空仓跟随者按「在场」信号于次一交易日开盘买入。
 
-    数据只取本地真实 TQQQ 序列(腾讯源,2011 起,当前价=实际市价 81.28 级),
-    坚决不用 SYNTH 拼接序列(其绝对值是拼接常数缩放的连续口径,≠市价,用户
-    无法在券商端核对)。信号不变性:SYNTH=真实×常数 → rolling 均线同比缩放,
-    px/MA 比值与信号判定两口径逐位一致(2026-10-10 实测差 0.000000)。
+def _signal_snapshot(cfg: dict) -> dict:
+    """单标的策略快照:真实键数据 + 四线计算 + 状态机信号 + 距离文案 + K 线 payload。
+
+    数据只取本地真实序列(腾讯源,当前价=实际市价),坚决不用 SYNTH 拼接序列
+    (其绝对值是拼接常数缩放的连续口径,≠市价,用户无法在券商端核对)。
     无真实数据直接报错,不降级不占位。
     """
     import pandas as pd
@@ -111,27 +123,35 @@ async def ma_signal():
     from app.backtest.strategies import get_strategy
     from app.data import store
 
-    df = store.read_ohlcv("TQQQ")
+    ticker, p = cfg["ticker"], cfg["params"]
+    trend_n, panic_n, anchor_n = int(p["ma_trend"]), int(p["ma_panic"]), int(p["oh_anchor"])
+    sell_m, rebuy_m = float(p["oh_sell_mult"]), float(p["oh_rebuy_mult"])
+
+    df = store.read_ohlcv(ticker)
     if df is None or df.empty:
-        return {"ok": False, "error": "无本地真实 TQQQ 数据——先运行同步;提醒面板不使用拼接序列"}
-    if len(df) < 501:
-        return {"ok": False, "error": f"本地 TQQQ 仅 {len(df)} 根,不足 500 日均线(需要 501 根)"}
+        return {"ok": False, "ticker": ticker, "error": f"无本地真实 {ticker} 数据——先运行同步"}
+    need = max(trend_n, panic_n, anchor_n) + 1
+    if len(df) < need:
+        return {"ok": False, "ticker": ticker,
+                "error": f"本地 {ticker} 仅 {len(df)} 根,不足最长均线 {need - 1} 日"}
 
     px_series = df["Adj Close"]
-    ma200 = px_series.rolling(200, min_periods=200).mean()
-    ma500 = px_series.rolling(500, min_periods=500).mean()
+    ma200 = px_series.rolling(trend_n, min_periods=trend_n).mean()
+    ma500 = px_series.rolling(panic_n, min_periods=panic_n).mean()
+    ma_anchor = px_series.rolling(anchor_n, min_periods=anchor_n).mean()
     last = df.index[-1]
     px, m2, m5 = float(px_series.iloc[-1]), float(ma200.iloc[-1]), float(ma500.iloc[-1])
     px_prev = float(px_series.iloc[-2])
-    oh_sell, oh_rebuy = m2 * 1.5, m2 * 1.2
+    m_anchor = float(ma_anchor.iloc[-1])
+    oh_sell, oh_rebuy = m_anchor * sell_m, m_anchor * rebuy_m   # 标量(距离文案/信号判断用)
 
-    # 过热增强形态信号(overheat=on):w>0 即「在场」。翻转日 t 收盘确认信号 → t+1 开盘成交
+    # 信号状态机(overheat=on):w>0 即「在场」。翻转日 t 收盘确认信号 → t+1 开盘成交。
+    # 参数与四线计算同源显式传齐,默认值将来变化不影响提醒面板口径
     stg = get_strategy("ma200_panic")()
-    prices = px_series.to_frame("TQQQ")
-    out = stg.build(prices, {"signal_ticker": "TQQQ", "holding_ticker": "TQQQ", "overheat": "on"})
-    w = out.weights["TQQQ"].round(6)
+    prices = px_series.to_frame(ticker)
+    out = stg.build(prices, {"signal_ticker": ticker, "holding_ticker": ticker, **p})
+    w = out.weights[ticker].round(6)
     w_now, w_prev = bool(w.iloc[-1] > 0), bool(w.iloc[-2] > 0)
-    # 仓位翻转序列(日期, 方向);w 序列起点翻转无意义(状态机暖机)
     chg = (w != w.shift(1)) & w.shift(1).notna()
     flips = [(d, "buy" if bool(w.loc[d] > 0) else "sell") for d in w.index[chg]]
     last_flip = (str(flips[-1][0].date()), "在场" if w.iloc[-1] > 0 else "空仓") \
@@ -144,13 +164,13 @@ async def ma_signal():
         action, text = "hold", "持有,无需动作"
     elif w_now is False and w_prev:
         if px > oh_sell:
-            action, text = "sell", "过热止盈信号(收盘>200MA+50%)→ 次一交易日开盘卖出,等回落买回"
+            action, text = "sell", "过热止盈信号(收盘越过过热线)→ 次一交易日开盘卖出,等回落到过热回调线买回"
         else:
-            action, text = "sell", "离场信号(收盘跌破200MA)→ 次一交易日开盘卖出"
+            action, text = "sell", "离场信号(收盘跌破趋势线)→ 次一交易日开盘卖出"
     elif px > oh_sell:
-        action, text = "wait", "过热等待中,等回落到 200MA+20%(线上)买回"
+        action, text = "wait", "过热等待中,等回落到过热回调线(趋势线上方)买回"
     else:
-        action, text = "wait", "空仓观望(价格在 200MA 与 500MA 之间,等站上 200MA 或跌破 500MA 恐慌线)"
+        action, text = "wait", "空仓观望(价格在趋势线与恐慌线之间,等站上趋势线或跌破恐慌线抄底)"
 
     # 关键距离:按「当前价格位置 × 策略状态」列出到各线还差的价格变动%
     distances: list[dict] = []
@@ -161,35 +181,27 @@ async def ma_signal():
 
     in_panic = px < m5
     if action in ("hold", "buy"):          # 在场(或新进场):上行防过热,下行防破位
-        add("涨到过热止盈线(200MA+50%)卖出", oh_sell)
-        add("跌到回落买回线(200MA+20%)", oh_rebuy, "仅过热止盈卖出后生效")
-        add("跌到 200MA 破位卖出线", m2)
+        add("涨到过热线止盈卖出", oh_sell)
+        add("跌到过热回调线", oh_rebuy, "仅过热止盈卖出后生效")
+        add("跌到趋势线破位卖出", m2)
     elif action == "wait" and px > oh_sell:  # 过热等待:等回落到买回带
-        add("跌到回落买回线(200MA+20%)买回", oh_rebuy)
-        add("跌回 200MA(等待作废,恢复普通空仓)", m2)
+        add("跌到过热回调线买回", oh_rebuy)
+        add("跌回趋势线(等待作废,恢复普通空仓)", m2)
     elif action == "wait":                  # 空仓观望带:两条进场路
-        add("涨到 200MA 上方买入", m2)
-        add("跌到 500MA 恐慌线买入", m5)
+        add("涨到趋势线上方买入", m2)
+        add("跌到恐慌线抄底买入", m5)
     elif action == "sell" and px > oh_sell:  # 过热止盈卖出:等回落接回
-        add("跌到回落买回线(200MA+20%)买回", oh_rebuy)
-        add("跌回 200MA(等待作废,恢复普通空仓)", m2)
-    elif action == "sell":                  # 破 200MA 卖出:两条重新进场路
-        add("涨回 200MA 上方买入", m2)
+        add("跌到过热回调线买回", oh_rebuy)
+        add("跌回趋势线(等待作废,恢复普通空仓)", m2)
+    elif action == "sell":                  # 破趋势线卖出:两条重新进场路
+        add("涨回趋势线上方买入", m2)
         if not in_panic:
-            add("跌到 500MA 恐慌线买入", m5)
-
-    strategy = {
-        "name": "200MA趋势 + 500MA恐慌抄底 + (收盘 > 200MA + 50%止盈，回落200MA + 20%买回)",
-        "action": action, "action_text": text,
-        "distances": distances,
-        "last_flip": last_flip,
-    }
+            add("跌到恐慌线抄底买入", m5)
 
     today = pd.Timestamp.today().normalize()
 
     # K 线窗口(策略提醒蜡烛图):尾部 240 根 ≈ 1 年。均线沿用全史 rolling 序列
     # 切尾而非窗口内重算,窗口首日的均线值即全史口径,与信号判定一致。
-    # 蜡烛四列取腾讯前复权 OHLC(实测 Close==Adj Close,与 px/MA 同口径)。
     n = 240
     win = df.iloc[-n:]
     tail = lambda s: [round(float(v), 2) if pd.notna(v) else None
@@ -200,7 +212,8 @@ async def ma_signal():
 
     return {
         "ok": True,
-        "ticker": "TQQQ",
+        "ticker": ticker,
+        "label": cfg["label"],
         "as_of": str(last.date()),
         # 美股周末+短假 → >4 个自然日覆盖不过周五满周,超阈值即视为陈旧(频控事故哲学:披露不静默)
         "stale_days": int((today - last.normalize()).days),
@@ -210,14 +223,40 @@ async def ma_signal():
         "px_ratio": round(px / m2, 2) if m2 else None,
         "overheat_sell_px": round(oh_sell, 2),
         "overheat_rebuy_px": round(oh_rebuy, 2),
-        "strategies": [strategy],
+        "strategies": [{
+            "name": "MA趋势 + MA恐慌抄底 + 过热止盈",
+            "action": action, "action_text": text,
+            "distances": distances,
+            "last_flip": last_flip,
+        }],
         "chart": {
             "dates": [str(d.date()) for d in win.index],
             "kline": kline,
             "ma200": tail(ma200), "ma500": tail(ma500),
-            "oh_sell": tail(ma200 * 1.5), "oh_rebuy": tail(ma200 * 1.2),
+            "oh_sell": tail(ma_anchor * sell_m), "oh_rebuy": tail(ma_anchor * rebuy_m),
+            # 四线名称(K线图 legend/端部标签/tooltip 共用;参数变了改这里即可)
+            "line_labels": {
+                "ma200": f"趋势线 MA{trend_n}", "ma500": f"恐慌线 MA{panic_n}",
+                "oh_sell": f"过热线 MA{anchor_n}×{sell_m}",
+                "oh_rebuy": f"过热回调线 MA{anchor_n}×{rebuy_m}",
+            },
             # 买卖信号打点(▲买/▼卖):翻转日 = 信号收盘确认日;窗口外丢弃
             "flips": [{"date": str(d.date()), "type": t}
                       for d, t in flips if d >= win.index[0]],
         },
     }
+
+
+@router.get("/ma_signal")
+async def ma_signal():
+    """当日策略提醒(多标的):ma200_panic 过热增强形态(overheat=on)的最新信号快照。
+
+    语义 = 每日收盘后的执行指令(引擎 next_open 口径):t 收盘信号 → t+1 开盘
+    成交。空仓跟随者按「在场」信号于次一交易日开盘买入。标的清单见
+    SIGNAL_CONFIGS(TQQQ 跟单形态 + QQQ 共识版),单标的缺数据只隐藏该卡并
+    披露原因,不影响其他标的。
+    """
+    signals = [_signal_snapshot(c) for c in SIGNAL_CONFIGS]
+    if not any(s.get("ok") for s in signals):
+        return {"ok": False, "error": "所有标的均无本地真实数据——先运行同步;提醒面板不使用拼接序列"}
+    return {"ok": True, "signals": signals}

@@ -25,18 +25,49 @@ const singleTicker = () => {
   return parts[0] || "";
 };
 
+// ---------- 主标的变更联动（标的先行的核心：chips 高亮 → 数据窗口 → 策略参数/基准跟随） ----------
+const DEFAULT_TICKER_HINT =
+  "策略所需的信号/防御资产（如 QQQ 的 200 日均线）由系统根据策略参数自动加载，无需手动输入。对照用资产放「基准对照」框。";
+
+function syncChips() {
+  const t = $("#tickers").value.trim().toUpperCase();
+  document.querySelectorAll("#ticker-chips .chip").forEach(ch =>
+    ch.classList.toggle("active", ch.dataset.t === t));
+}
+
+function onTickerChange() {
+  document.getElementById("ticker-hint").textContent = DEFAULT_TICKER_HINT;  // 清多标的警告等临态文案
+  // 基准跟随标的：换主标的后旧基准失效，重置为新主标的死拿
+  benchDirty = false;
+  // 参数记忆按标的独立(策略绑标的),切标的=切槽,各自的手改原样保留
+  // TQQQ 数据模式只对 TQQQ 主标的有意义
+  document.getElementById("tqqq-mode-row").style.display = singleTicker() === "TQQQ" ? "" : "none";
+  syncChips();
+  loadDefaultRange();
+  renderParamForm();
+}
+
 // 默认日期 = 本地数据全范围（起始/结束的默认值，直接可跑完整窗口）
+let loadRangeSeq = 0;    // 连续换标的时丢弃过期响应
+let datesDirty = false;  // 用户手改过日期后，换标的保留窗口（同窗口跨标的对比是核心用法）
 async function loadDefaultRange() {
   const t = singleTicker();
   if (!t) return;
+  const seq = ++loadRangeSeq;
   try {
     const res = await fetch(`/api/backtest/range?tickers=${encodeURIComponent(t)}`);
     if (!res.ok) return;
     const r = await res.json();
-    $("#start").value = r.start;
-    $("#end").value = r.end;
+    if (seq !== loadRangeSeq) return;
     const per = Object.entries(r.per_ticker || {})
       .map(([k, v]) => `${k}: ${v.start} → ${v.end}`).join(" · ");
+    if (datesDirty) {
+      document.getElementById("range-hint").textContent =
+        `${t} 本地数据全范围：${r.start} → ${r.end}  [${per}]（当前窗口为手动设置，未覆写）`;
+      return;
+    }
+    $("#start").value = r.start;
+    $("#end").value = r.end;
     document.getElementById("range-hint").textContent =
       `默认已回填 ${t} 本地数据全范围：${r.start} → ${r.end}  [${per}]`;
   } catch (e) { /* 留空 = 引擎自动用全范围 */ }
@@ -46,22 +77,45 @@ function currentStrategy() {
   return catalog.find(s => s.id === $("#strategy-select").value);
 }
 
-// 各策略的默认基准对照：择时类策略需要跟「TQQQ 死拿」+「QQQ 标杆」双对照；
-// 买入持有/定投本身就是 TQQQ 的持有形态，再对照 TQQQ 是重复 → 只留 QQQ
-const DEFAULT_BENCHMARKS = {
-  buy_hold: "QQQ",
-  dca: "QQQ",
-  ma200_panic: "TQQQ,QQQ",
-  ma_cross: "TQQQ,QQQ",
+// 默认基准对照 = 主标的自己（策略与标的绑定：任何策略都与「死拿该标的」比较，
+// 这是择时评估最核心的对照；TQQQ 的策略对照 TQQQ、QQQ 的策略对照 QQQ）。
+// 需要额外标杆（如加 QQQ）可手动在基准框里补。
+let benchDirty = false;  // 用户手改过基准后保留（换策略不覆写；换主标的必重置）
+
+function defaultBenchmarks() {
+  return singleTicker() || "";
+}
+
+// per-ticker 策略预设。QQQ 共识版（2026-10-11 用户拍板）：牛熊线 200 出场 +
+// 恐慌线 400 抄底 + 对牛熊线乖离 20% 止盈/10% 回调买回（对称乖离档；研究版
+// 300/400+锚150@1.15/1.02 曾被用户判定过拟合弃用）。TQQQ 无预设 = ParamSpec
+// 默认(200/500 + 锚200@1.5/1.2 经典过热)。
+const PER_TICKER_PRESETS = {
+  QQQ: { ma_trend: 200, ma_panic: 400, oh_anchor: 200, oh_sell_mult: 1.2, oh_rebuy_mult: 1.1,
+         overheat: "on" },
 };
+
+// 用户手改过的参数值按 [主标的][key] 两级记忆：策略绑标的、参数跟着标的走，
+// 各标的的调参互不干扰；手改 > per-ticker 预设 > ParamSpec 默认
+let paramEdits = {};
+
+function paramValue(p, mainTk) {
+  const edits = paramEdits[mainTk] || {};
+  if (p.key in edits) return edits[p.key];
+  if (/_ticker$/.test(p.key)) return mainTk || p.default;   // 信号/持仓资产跟随主标的
+  const preset = PER_TICKER_PRESETS[mainTk] || {};
+  if (p.key in preset) return preset[p.key];
+  return p.default ?? "";
+}
 
 function renderParamForm() {
   const s = currentStrategy();
   if (!s) return;
   $("#strategy-desc").textContent = s.description;
-  $("#benchmarks").value = DEFAULT_BENCHMARKS[s.id] || "QQQ";
+  if (!benchDirty) $("#benchmarks").value = defaultBenchmarks();
+  const mainTk = singleTicker();
   $("#param-form").innerHTML = s.params.map(p => {
-    const val = p.default ?? "";
+    let val = paramValue(p, mainTk);
     switch (p.type) {
       case "select":
         return `<label class="field"><span>${p.label}</span>
@@ -206,10 +260,13 @@ function renderResult(data) {
   const sSub = document.getElementById("strategy-subtitle");
   const mainTk = (data.tickers && data.tickers[0]) || "";
   const sName = sInfo ? sInfo.name : "策略";
-  const overheatOn = (data.params || {}).overheat === "on";
-  sSub.textContent = overheatOn
-    ? `${mainTk} · ${sName} + (收盘 > 200MA + 50%止盈，回落200MA + 20%买回)`
-    : `${mainTk} · ${sName}`;
+  const qp = data.params || {};
+  const overheatOn = qp.overheat === "on";
+  // 过热副标题随实参生成(锚均线/倍数参数化后不再写死 200MA+50%)
+  const ohTxt = overheatOn
+    ? ` + (过热线 MA${qp.oh_anchor ?? 200}×${qp.oh_sell_mult ?? 1.5}止盈 · 过热回调线 MA${qp.oh_anchor ?? 200}×${qp.oh_rebuy_mult ?? 1.2}买回)`
+    : "";
+  sSub.textContent = `${mainTk} · ${sName}${ohTxt}`;
   sT.style.display = "block";
   sSub.style.display = "block";
   // 未增强基线（后端 overheat=on 时同窗口配跑）：放策略区下方，组名=原策略名
@@ -544,6 +601,25 @@ function renderTradesTable(data) {
   });
   $("#trades-table").innerHTML = html + "</tbody></table>";
 }
+
+// ---------- 交互接线 ----------
+$("#tickers").addEventListener("change", onTickerChange);
+document.querySelectorAll("#ticker-chips .chip").forEach(ch =>
+  ch.addEventListener("click", () => {
+    if (singleTicker() === ch.dataset.t) return;  // 已选中
+    $("#tickers").value = ch.dataset.t;
+    onTickerChange();
+  }));
+// 参数记忆：param-form 容器级委托（renderParamForm 重建内部 DOM 不影响监听）,按当前主标的记槽
+$("#param-form").addEventListener("change", (e) => {
+  const key = e.target.dataset && e.target.dataset.param;
+  if (key) (paramEdits[singleTicker()] = paramEdits[singleTicker()] || {})[key] = e.target.value;
+});
+// 用户手改过日期后标记：换主标的时窗口不再被覆写（同窗口跨标的对比）
+$("#start").addEventListener("change", () => { datesDirty = true; });
+$("#end").addEventListener("change", () => { datesDirty = true; });
+// 手改过基准后保留（换策略不覆写；换主标的必重置，见 onTickerChange）
+$("#benchmarks").addEventListener("change", () => { benchDirty = true; });
 
 loadStrategies();
 loadDefaultRange();

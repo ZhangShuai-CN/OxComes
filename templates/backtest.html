@@ -4,20 +4,21 @@
 <div class="page-grid">
   <!-- 左：参数面板 -->
   <section class="panel params-panel">
-    <h2>⚙️ 策略与参数</h2>
+    <h2>🎯 标的与窗口</h2>
     <label class="field">
-      <span>策略</span>
-      <select id="strategy-select"><option value="">加载中…</option></select>
-    </label>
-    <p id="strategy-desc" class="hint"></p>
-    <div id="param-form"></div>
-    <label class="field">
-      <span>主标的（单个，如 TQQQ）</span>
+      <span>主标的（单个）</span>
       <input id="tickers" type="text" value="TQQQ" spellcheck="false">
     </label>
-    <p class="hint" id="ticker-hint">主标的单个填写。策略所需的信号/防御资产（如 QQQ 的
-      200 日均线）由系统自动加载，无需手动输入。对照用资产放「基准对照」框。</p>
-    <p class="hint">TQQQ 数据模式：<label><input type="radio" name="tqqq-data" value="auto" checked>
+    <div class="ticker-chips" id="ticker-chips">
+      <button type="button" class="chip active" data-t="TQQQ">TQQQ</button>
+      <button type="button" class="chip" data-t="QQQ">QQQ</button>
+      <button type="button" class="chip" data-t="SPY">SPY</button>
+      <button type="button" class="chip" data-t="SOXX">SOXX</button>
+      <button type="button" class="chip" data-t="SMH">SMH</button>
+    </div>
+    <p class="hint" id="ticker-hint">策略所需的信号/防御资产（如 QQQ 的 200 日均线）由系统
+      根据策略参数自动加载，无需手动输入。对照用资产放「基准对照」框。</p>
+    <p class="hint" id="tqqq-mode-row">TQQQ 数据模式：<label><input type="radio" name="tqqq-data" value="auto" checked>
       自动（起点早于本地真实首日时用 QQQ×3 合成拼接）</label>
       <label><input type="radio" name="tqqq-data" value="always"> 强制合成</label>
       <label><input type="radio" name="tqqq-data" value="never"> 仅真实（本地 2011-01-26 起）</label>
@@ -27,9 +28,17 @@
       <label class="field"><span>结束日期</span><input id="end" type="date"></label>
     </div>
     <p class="hint" id="range-hint">日期留空 = 数据全范围（加载时自动回填本地数据最早/最新日）</p>
+    <h4 class="sub-title">⚙️ 策略与参数</h4>
     <label class="field">
-      <span>基准对照（逗号分隔，可空）</span>
-      <input id="benchmarks" type="text" value="TQQQ,QQQ" spellcheck="false">
+      <span>策略</span>
+      <select id="strategy-select"><option value="">加载中…</option></select>
+    </label>
+    <p id="strategy-desc" class="hint"></p>
+    <div id="param-form"></div>
+    <h4 class="sub-title">🧪 运行设置</h4>
+    <label class="field">
+      <span>基准对照（逗号分隔，默认主标的死拿）</span>
+      <input id="benchmarks" type="text" value="TQQQ" spellcheck="false">
     </label>
     <div class="row2">
       <label class="field"><span>初始资金($)</span><input id="capital" type="number" value="10000"></label>
