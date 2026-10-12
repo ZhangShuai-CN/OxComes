@@ -19,5 +19,24 @@
   <div id="fng-bt-chart" class="chart-md"></div>
   <p class="hint" id="fng-bt-note"></p>
 </section>
+<section class="panel">
+  <h2>🧮 AHR999/Mayer 乖离 × BTC 择时回测</h2>
+  <p class="hint">AHR999(=价格/MA200,Mayer 多倍数同型)滞回:乖离 > 卖阈值清仓逃顶,
+    乖离 < 买阈值满仓抄底,中间保持;MA200 预热完自动起跑(2018-03 起)。默认卖×2.4/
+    买×0.6 = 2026-10-12 全窗实测 55x/5 笔(持币 18x);两档恰为 Mayer 顶部带与九神抄底区。
+    ⚠ 买档对 2022 接刀位置单事件敏感(0.6 与 0.8 差 35x),警惕过拟合,改参数自查稳健性。</p>
+  <div class="row2">
+    <label class="field"><span>卖阈值(乖离 >)</span><input id="ahr-sell" type="number" value="2.4" min="0.5" max="8" step="0.1"></label>
+    <label class="field"><span>买阈值(乖离 <)</span><input id="ahr-buy" type="number" value="0.6" min="0.1" max="3" step="0.05"></label>
+  </div>
+  <div class="row2">
+    <label class="field"><span>换手成本(bps)</span><input id="ahr-fee" type="number" value="10" min="0" max="100" step="5"></label>
+    <label class="field"><span></span><button class="primary" id="ahr-run">▶ 运行</button></label>
+  </div>
+  <p class="hint" id="ahr-bt-status"></p>
+  <div id="ahr-bt-cards" class="stat-row"></div>
+  <div id="ahr-bt-chart" class="chart-md"></div>
+  <p class="hint" id="ahr-bt-note"></p>
+</section>
 <script src="/static/js/crypto_bt.js"></script>
 {% endblock %}

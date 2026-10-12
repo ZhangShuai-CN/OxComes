@@ -2,6 +2,14 @@
 {% block title %}加密总览 · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="stat-row" id="coin-cards"></div>
+<section class="panel" id="panel-peak">
+  <h2>🔔 BTC 逃顶/抄底信号灯 <span class="hint" id="peak-meta"></span></h2>
+  <div class="stat-row" id="peak-cards"></div>
+  <p class="hint" id="peak-note">AHR999(=价格/MA200,Mayer 多倍数同型)、Pi 周期(111日均线
+    上穿 2×350日均线=周期顶)、200 周均线(历次深熊底触线)、2 年均线五倍规则(price/2YMA<1 抄底
+    >5 逃顶)。均线未成形的指标显示说明。MVRV/NUPL 等链上指标需 realized cap,无大陆可达免费源,
+    不造数据;策略化(阈值可调滞回回测)见「加密回测」页。</p>
+</section>
 <section class="panel">
   <h2>😨 恐惧贪婪指数 <span class="hint" id="fng-now"></span></h2>
   <div id="fng-gauge" class="chart-md"></div>

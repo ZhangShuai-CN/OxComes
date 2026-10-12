@@ -72,8 +72,26 @@ async function loadFng() {
   }, { notMerge: true });
 }
 
+
+// ── BTC 逃顶/抄底信号灯(2026-10-12;/api/crypto/peak-indicators) ──
+async function loadPeak() {
+  const panel = document.getElementById("panel-peak");
+  const d = await fetch("/api/crypto/peak-indicators").then(r => r.json()).catch(() => null);
+  if (!d || !d.ok) { panel.style.display = "none"; return; }
+  const cards = (d.items || []).map(it => `
+    <div class="stat-card">
+      <div class="label">${it.name}</div>
+      <div class="value ${it.cls || ""}">${it.value != null ? it.value : "—"}</div>
+      <div class="sub">${it.state || ""} · ${it.value != null ? it.formula : "均线未成形(数据 2017-08 起)"}</div>
+      <div class="sub" style="margin-top:4px">${it.zones}</div>
+    </div>`).join("");
+  document.getElementById("peak-cards").innerHTML = cards;
+  document.getElementById("peak-meta").textContent = `截至 ${d.as_of} · 本地 BTC 全史计算`;
+}
+
 loadDaily();
 loadFng();
+loadPeak();
 window.addEventListener("resize", () => {
   gauge && gauge.resize(); fngChart && fngChart.resize();
 });
